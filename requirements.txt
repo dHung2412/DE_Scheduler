@@ -1,0 +1,7 @@
+fastavro 
+dotenv
+aiokafka
+python-snappy
+fastapi
+uvicorn[standard]
+pyspark

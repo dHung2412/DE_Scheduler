@@ -1,0 +1,11 @@
+
+KAFKA_BOOTSTRAP_SERVERS = "localhost:9092"
+KAFKA_TOPIC = "raw_metrics_avro"
+KAFKA_RETRY_MAX = 3
+KAFKA_RETRY_BACKOFF_BASE_S = 0.5
+KAFKA_FALLBACK_DIR = "D:/Project/Data_Engineering/DE_Scheduler/tmp/metric_fallbacks"
+
+BATCH_MAX_SIZE = 1000
+BATCH_MAX_TIME_S = 5.0
+
+QUEUE_PRESSURE_LOG_EVERY = 5
