@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import signal
+import platform
 # Hàng đợi này là bộ đệm (buffer) trung tâm
 # Collector dùng metric_queue.put()
 # Producer dùng metric_queue.get()
@@ -75,10 +76,25 @@ async def wait_for_shutdown():
     await drain_queue()
 
 def setup_signal_handlers():
-    loop = asyncio.get_event_loop()
-    loop.add_signal_handler(signal.SIGINT, _handle_shutdown)
-    loop.add_signal_handler(signal.SIGTERM, _handle_shutdown)
-    logging.info("-----> Signal handlers for SIGINT and SIGTERM are set up.")
+    """
+    Cài đặt xử lý tín hiệu cho Graceful Shutdown.
+    Chỉ thực hiện trên các hệ thống hỗ trợ (non-Windows).
+    """
+    
+    # Kiểm tra xem có phải Windows không
+    if platform.system() == "Windows":
+        logging.warning("-----> [SHUTDOWN] Bỏ qua signal handlers (SIGINT/SIGTERM) trên Windows.")
+        # Chúng ta dựa vào cơ chế 'lifespan' của Uvicorn để bắt lệnh tắt
+        return
+        
+    # Nếu là Linux/macOS, sử dụng cơ chế asyncio chuẩn
+    try:
+        loop = asyncio.get_event_loop()
+        loop.add_signal_handler(signal.SIGINT, _handle_shutdown)
+        loop.add_signal_handler(signal.SIGTERM, _handle_shutdown)
+        logging.info("-----> [SHUTDOWN] Signal handlers (SIGINT/SIGTERM) are set up.")
+    except Exception as e:
+        logging.error(f"-----> [SHUTDOWN] Không thể cài đặt signal handlers: {e}")
 
 async def start_queue_management():
     """Khởi động quản lý hàng đợi và xử lý tắt."""

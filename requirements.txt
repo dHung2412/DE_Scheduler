@@ -5,3 +5,4 @@ python-snappy
 fastapi
 uvicorn[standard]
 pyspark
+httpx

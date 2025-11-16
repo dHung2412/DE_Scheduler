@@ -1,90 +1,17 @@
 import fastavro
+import json
+from pathlib import Path
 
-METRIC_SCHEMA_DICT = {
-    "type": "record",
-    "name": "MetricEvent",
-    "namespace": "com.platform.metrics",
-    "doc": "Unified schema for all metric events emitted by services.",
-    "fields": [
-        {
-            "name": "event_id",
-            "type": "string",
-            "doc": "UUID for idempotency + traceability"
-        },
-        {
-            "name": "service_name",
-            "type": "string",
-            "doc": "Name of the service emitting the metric"
-        },
-        {
-            "name": "metric_type",
-            "type": "string",
-            "doc": "Type/category of metric (cpu_usage, db_size, job_duration...)"
-        },
-        {
-            "name": "value",
-            "type": "double",
-            "doc": "Numeric value of metric"
-        },
-        {
-            "name": "unit",
-            "type": "string",
-            "default": "none",
-            "doc": "Unit of metric"
-        },
-        {
-            "name": "timestamp",
-            "type": {
-                "type": "long",
-                "logicalType": "timestamp-millis"
-            },
-            "doc": "Epoch timestamp in milliseconds"
-        },
-        {
-            "name": "env",
-            "type": ["null", "string"],
-            "default": None,
-            "doc": "Environment (dev/stg/prod)"
-        },
-        {
-            "name": "tags",
-            "type": {
-                "type": "map",
-                "values": "string"
-            },
-            "default": {},
-            "doc": "Additional key-value metadata"
-        },
-        {
-            "name": "metadata",
-            "type": [
-                "null",
-                {
-                    "type": "record",
-                    "name": "MetricMetadata",
-                    "fields": [
-                        {
-                            "name": "source_ip",
-                            "type": ["null", "string"],
-                            "default": None
-                        },
-                        {
-                            "name": "collector_version",
-                            "type": ["null", "string"],
-                            "default": None
-                        },
-                        {
-                            "name": "notes",
-                            "type": ["null", "string"],
-                            "default": None
-                        }
-                    ]
-                }
-            ],
-            "default": None,
-            "doc": "Optional metadata"
-        }
-    ]
-}
+SCHEMA_FILE_PATH = Path(__file__).parent.joinpath("schema/github_event.avsc")
 
-PARSED_SCHEMA = fastavro.parse_schema(METRIC_SCHEMA_DICT)
+def load_schema_from_file(schema_file_path: Path) -> dict:
+    print(f"Loading Avro schema from {schema_file_path}")
+
+    if not schema_file_path.exists():
+        raise FileNotFoundError(f"----->[SCHEMA] Schema file not found: {schema_file_path}")
+
+    with open(schema_file_path, "r", encoding='utf-8') as schema_file:
+        return json.load(schema_file)
+    
+SCHEMA_DICT = load_schema_from_file(SCHEMA_FILE_PATH)
+PARSED_SCHEMA = fastavro.parse_schema(SCHEMA_DICT)

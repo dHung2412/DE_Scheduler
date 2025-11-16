@@ -112,7 +112,7 @@ async def run_kafka_producer_worker(shutdown_event: Optional[asyncio.Event] = No
                 try:
                     item = await asyncio.wait_for(metric_queue.get(), timeout=remaining)
                     batch.append(item["metric"]) # hoặc append(item)
-                    batch_ids.append(getattr(item, "event_id", "unknown") or "unknown")
+                    batch_ids.append(item.get("event_id", "unknown") or "unknown")
 
                 except asyncio.TimeoutError:
                     break
