@@ -6,45 +6,55 @@ import fastavro
 import logging
 import os
 import time
+from pathlib import Path
+
 from aiokafka import AIOKafkaProducer
 from aiokafka.errors import KafkaError
 
-
 from .shared_queue import metric_queue
 from .avro_schema import PARSED_SCHEMA
-from . import config
+
+from .config_1 import Config_1
+
+config1 = Config_1()
+SCHEMA_FILE_PATH = Path(config1.AVRO_SCHEMA_PATH)
 
 producer = AIOKafkaProducer(
-    bootstrap_servers=config.KAFKA_BOOTSTRAP_SERVERS,
+    bootstrap_servers=config1.KAFKA_BOOTSTRAP_SERVERS,
     compression_type="snappy",
     linger_ms=0,
 )
 
-# ------------------------------------------------------------------------------
 def serialize_batch_avro(batch: List[dict]) -> bytes:
+
     with io.BytesIO() as fo:
         fastavro.writer(fo, PARSED_SCHEMA, batch)
+
         return fo.getvalue()
 
 async def persist_fallback(batch_bytes: bytes, batch_id: int):
     """Lưu batch dữ liệu vào thư mục fallback khi không gửi được đến Kafka."""
-    os.makedirs(config.KAFKA_FALLBACK_DIR, exist_ok=True)
-    filename = os.path.join(config.KAFKA_FALLBACK_DIR, f"failed_batch_{batch_id}_{int(time.time())}.avro")
+
+    os.makedirs(config1.KAFKA_FALLBACK_DIR, exist_ok=True)
+
+    filename = os.path.join(config1.KAFKA_FALLBACK_DIR, f"failed_batch_{batch_id}_{int(time.time())}.avro")
     
     await asyncio.to_thread(_write_file, filename, batch_bytes)
     
-    logging.warning(f"-----> Đã lưu batch thất bại vào {filename}")
+    logging.warning(f"-----> [KAFKA] Đã lưu batch thất bại vào {filename}")
 
 def _write_file(filename: str, data: bytes):
+
     with open(filename, "wb") as f:
         f.write(data)
 
-# ------------------------------------------------------------------------------
+#__________________________________________________________________________________________
 async def send_with_retries(topic: str,value: bytes, batch_id: int) -> Optional[dict]:
-    attempt = 0
-    backoff = config.KAFKA_RETRY_BACKOFF_BASE_S
 
-    while attempt < config.KAFKA_RETRY_MAX:
+    attempt = 0
+    backoff = config1.KAFKA_RETRY_BACKOFF_BASE_S
+
+    while attempt < config1.KAFKA_RETRY_MAX:
         attempt += 1
         
         try:
@@ -62,7 +72,7 @@ async def send_with_retries(topic: str,value: bytes, batch_id: int) -> Optional[
         except KafkaError as e:
             logging.error(f"-----> [KAFKA] Lỗi gửi batch {batch_id} đến Kafka (lần {attempt}): {e}")
             
-            if attempt >= config.KAFKA_RETRY_MAX:
+            if attempt >= config1.KAFKA_RETRY_MAX:
                 logging.error(f"-----> [KAFKA] Đã vượt quá số lần thử gửi batch {batch_id}. Lưu vào fallback.")
                 return None
             
@@ -72,13 +82,13 @@ async def send_with_retries(topic: str,value: bytes, batch_id: int) -> Optional[
         except Exception as e:
             logging.exception(f"-----> [KAFKA] Ngoại lệ không mong muốn khi gửi batch {batch_id}: {e}")
             
-            if attempt > config.KAFKA_RETRY_MAX:
+            if attempt > config1.KAFKA_RETRY_MAX:
                 return None
             
             await asyncio.sleep(backoff)
             backoff *= 2
 
-# ------------------------------------------------------------------------------
+# __________________________________________________________________________________________
 async def run_kafka_producer_worker(shutdown_event: Optional[asyncio.Event] = None):
     """"
     Task nền liên tục:
@@ -93,11 +103,12 @@ async def run_kafka_producer_worker(shutdown_event: Optional[asyncio.Event] = No
         shutdown_event = asyncio.Event()
 
     await producer.start()
-    logging.info("----->[KAFKA] Kafka producer started.")
+    logging.info("-----> [KAFKA] Kafka producer started.")
 
     pressure_task = asyncio.create_task(_queue_pressure_logger(shutdown_event))
 
     try:
+
         while not shutdown_event.is_set():
             batch = []
             batch_ids = []
@@ -105,8 +116,10 @@ async def run_kafka_producer_worker(shutdown_event: Optional[asyncio.Event] = No
 
             # Collect batch
             while True:
-                remaining = config.BATCH_MAX_TIME_S - (asyncio.get_event_loop().time() - batch_start)
-                if remaining <= 0 or len(batch) >= config.BATCH_MAX_SIZE:
+
+                remaining = config1.BATCH_MAX_TIME_S - (asyncio.get_event_loop().time() - batch_start)
+                
+                if remaining <= 0 or len(batch) >= config1.BATCH_MAX_SIZE:
                     break
 
                 try:
@@ -118,7 +131,7 @@ async def run_kafka_producer_worker(shutdown_event: Optional[asyncio.Event] = No
                     break
 
                 except Exception as e:
-                    logging.exception(f"----->[KAFKA]  Lỗi khi lấy metric từ queue: {e}")
+                    logging.exception(f"-----> [KAFKA]  Lỗi khi lấy metric từ queue: {e}")
                     break
 
             if not batch:
@@ -126,77 +139,96 @@ async def run_kafka_producer_worker(shutdown_event: Optional[asyncio.Event] = No
                 continue
 
             batch_id = str(uuid.uuid4())
-            logging.info(f"----->[KAFKA]  Thu thập batch {batch_id} với {len(batch)} metrics, IDs: {batch_ids[:3]}")
+            logging.info(f"-----> [KAFKA]  Thu thập batch {batch_id} với {len(batch)} metrics, IDs: {batch_ids[:3]}")
 
             # Serialize batch
             try:
                 seriallized_batch = serialize_batch_avro(batch)
+
             except Exception as e:
-                logging.exception(f"----->[KAFKA] Lỗi khi serialize batch {batch_id}: {e}")
+                logging.exception(f"-----> [KAFKA] Lỗi khi serialize batch {batch_id}: {e}")
+
                 try:
                     await persist_fallback(b"SERIALIZE_ERROR\n", batch_id)
+
                 except Exception:
-                    logging.exception(f"----->[KAFKA] Không thể lưu batch serialize lỗi {batch_id} vào fallback.")
+                    logging.exception(f"-----> [KAFKA] Không thể lưu batch serialize lỗi {batch_id} vào fallback.")
+
                 # Mark items as done  => Queue không bị tắc
                 for _ in batch:
                     metric_queue.task_done()
                 continue
 
             # Send with retries
-            metadata = await send_with_retries(config.KAFKA_TOPIC, seriallized_batch, batch_id)
+            metadata = await send_with_retries(config1.KAFKA_TOPIC, seriallized_batch, batch_id)
 
             if metadata is None:
                 try:
                     await persist_fallback(seriallized_batch, batch_id)
+
                 except Exception:
-                    logging.exception(f"----->[KAFKA] Không thể lưu batch thất bại {batch_id} vào fallback.")
+                    logging.exception(f"-----> [KAFKA] Không thể lưu batch thất bại {batch_id} vào fallback.")
+
                 # Mark items as done
                 for _ in batch:
                     metric_queue.task_done()
+
             else:
                 # Success, mark items as done
                 for _ in batch:
                     metric_queue.task_done()
 
     except asyncio.CancelledError:
-        logging.info("----->[KAFKA] Kafka producer worker cancelled.")
+        logging.info("-----> [KAFKA] Kafka producer worker cancelled.")
+
     except Exception as e:
-        logging.exception(f"----->[KAFKA] Lỗi không mong muốn trong Kafka producer worker: {e}")
+        logging.exception(f"-----> [KAFKA] Lỗi không mong muốn trong Kafka producer worker: {e}")
+
     finally:
         shutdown_event.set()
         pressure_task.cancel()
+
         try:
             await pressure_task
+            
         except asyncio.CancelledError:
             pass
 
         await _drain_and_presist_remaining()
         await producer.stop()
-        logging.info("----->[KAFKA] Kafka producer stopped.")
+        logging.info("-----> [KAFKA] Kafka producer stopped.")
 
 
-# ---------- Helpers: pressure reporter & draining ----------
+#______________________________Helpers: pressure reporter & draining______________________________
 async def _queue_pressure_logger(shutdown_event: asyncio.Event):
     """Ghi log định kỳ về áp lực của queue."""
+
     last_log = 0
+
     while not shutdown_event.is_set():
         now = time.time()
-        if now - last_log >= config.QUEUE_PRESSURE_LOG_EVERY:
+
+        if now - last_log >= config1.QUEUE_PRESSURE_LOG_EVERY:
             qsize = metric_queue.qsize()
             logging.info(f"-----> [QUEUE] Kích thước hiện tại của metric_queue: {qsize}")
             last_log = now
+
         await asyncio.sleep(0.5)
 
 async def _drain_and_presist_remaining():
     """Đưa các mục còn lại vào một tệp avro trước khi tắt."""
+
     remaining = []
+
     while not metric_queue.empty():
         try:
             item = await metric_queue.get()
             remaining.append(item["metric"])
             metric_queue.task_done()
+
         except asyncio.QueueEmpty:
             break
+        
         except Exception:
             break
 

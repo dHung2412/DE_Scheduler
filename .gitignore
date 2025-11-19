@@ -3,4 +3,12 @@
 /.vscode
 /1.json
 /data
-/__pycache__S
+/__pycache__
+logs
+notebooks
+plugins
+warehouse
+note.txt
+dags
+tmp
+test.py

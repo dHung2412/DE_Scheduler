@@ -4,5 +4,5 @@ aiokafka
 python-snappy
 fastapi
 uvicorn[standard]
-pyspark
+pyspark==3.3.4
 httpx

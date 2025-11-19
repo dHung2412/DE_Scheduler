@@ -1,11 +1,14 @@
 import fastavro
 import json
 from pathlib import Path
+from .config_1 import Config_1
 
-SCHEMA_FILE_PATH = Path(__file__).parent.joinpath("schema/github_event.avsc")
+config1 = Config_1()
 
+SCHEMA_FILE_PATH = Path(config1.AVRO_SCHEMA_PATH)
+ 
 def load_schema_from_file(schema_file_path: Path) -> dict:
-    print(f"Loading Avro schema from {schema_file_path}")
+    print(f"----->[SCHEMA] Loading Avro schema from {schema_file_path}")
 
     if not schema_file_path.exists():
         raise FileNotFoundError(f"----->[SCHEMA] Schema file not found: {schema_file_path}")
