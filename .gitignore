@@ -3,7 +3,7 @@
 /.vscode
 /1.json
 /data
-/__pycache__
+__pycache__
 logs
 notebooks
 plugins
