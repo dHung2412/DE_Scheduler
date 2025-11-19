@@ -51,12 +51,6 @@ services:
     restart: always
     networks:
       - data_stack_net
-    # KÍCH HOẠT LẠI: Lệnh này BẮT BUỘC để tạo DB cho dbt
-    command: >
-      bash -c "docker-entrypoint.sh postgres &
-      sleep 10 &&
-      psql -U ${POSTGRES_USER} -d ${POSTGRES_DB} -c 'CREATE DATABASE ${POSTGRES_DATA_DB};'
-      "
 
   #################################################
   #  AIRFLOW (LocalExecutor - Chỉ 3 service)
@@ -72,21 +66,22 @@ services:
       _AIRFLOW_WWW_USER_PASSWORD: 'admin'
     user: "0:0"
 
-  airflow-webserver:
+  airflow-api-server:
     <<: *airflow-common
-    container_name: airflow-webserver
-    command: webserver
+    container_name: airflow-api-server
+    command: api-server
     ports:
       - "8080:8080"
     healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      test: ["CMD-SHELL", "airflow info > /dev/null 2>&1"]
       interval: 30s
       timeout: 10s
       retries: 5
       start_period: 30s
     restart: always
     depends_on:
-      <<: *airflow-common-depends-on
+      postgres:
+        condition: service_healthy
       airflow-init:
         condition: service_completed_successfully
 
@@ -102,7 +97,8 @@ services:
       start_period: 30s
     restart: always
     depends_on:
-      <<: *airflow-common-depends-on
+      postgres:
+       condition: service_healthy
       airflow-init:
         condition: service_completed_successfully
 

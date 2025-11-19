@@ -1,25 +1,21 @@
 """
 Kafka (Binary) → UDF Decode → Array[JSON] → Explode → Parse JSON → Iceberg Bronze
 """
-import sys
 from pathlib import Path
 from typing import List
-from pyspark import SparkContext
-from pyspark.sql import SparkSession
 from pyspark.sql.functions import udf, col, explode, current_timestamp, to_date
 from pyspark.sql.types import ArrayType, StringType, StructType, StructField, LongType, BooleanType
 import fastavro
 import io
 import json
 import logging
-import os
-import site
 from dotenv import load_dotenv
 from config_2 import Config_2
+from utils.spark_client import SparkClient
 
 load_dotenv()
 
-config2 = Config_2()
+config = Config_2()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,101 +25,9 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-def create_spark_session():
-
-    try:
-        sc = SparkContext.getOrCreate()
-        if sc._jsc:
-            logger.warning("-----> [BRONZE] Đang dừng Spark Context cũ...")
-            sc.stop()
-
-    except Exception as e:
-        logger.info(f"-----> [BRONZE] Không có Spark Context nào đang chạy: {e}")
-    
-    logger.info("-----> [BRONZE] Đang khởi tạo Spark Session...")
-    
-    spark_home = os.environ.get('SPARK_HOME', r"D:\config\spark-3.3.4-bin-hadoop3")
-
-    jars_dir = os.path.join(spark_home, "jars")
-    
-    required_jars = [
-        "spark-sql-kafka-0-10_2.12-3.3.4.jar",
-        "kafka-clients-2.8.1.jar",
-        "commons-pool2-2.11.1.jar",
-        "spark-token-provider-kafka-0-10_2.12-3.3.4.jar",
-        "iceberg-spark-runtime-3.3_2.12-1.4.3.jar",
-        "iceberg-aws-bundle-1.4.3.jar",
-        "hadoop-aws-3.3.4.jar",
-        "aws-java-sdk-bundle-1.12.262.jar"
-    ]
-
-    valid_jars = []
-    missing_jars = []
-    
-    for jar_name in required_jars:
-
-        jar_path = os.path.join(jars_dir, jar_name)
-
-        if os.path.exists(jar_path):
-            valid_jars.append(jar_path)
-            logger.debug(f"-----> [BRONZE] Tìm thấy JAR: {jar_name}")
-
-        else:
-            missing_jars.append(jar_name)
-            logger.warning(f"-----> [BRONZE] Không tìm thấy JAR: {jar_name}")
-    
-    if missing_jars:
-        logger.error(f"-----> [BRONZE] Thiếu {len(missing_jars)} JARs: {missing_jars}")
-        logger.error("-----> [BRONZE] Vui lòng download các JARs còn thiếu từ Maven Central")
-    
-    jars_conf = ",".join(valid_jars)
-    
-    venv_python = r"D:\Project\Data_Engineering\DE_Scheduler\.venv\Scripts\python.exe"
-    os.environ['PYSPARK_PYTHON'] = venv_python
-    os.environ['PYSPARK_DRIVER_PYTHON'] = venv_python    
-
-    if not os.path.exists(venv_python):
-        logger.warning(f"-----> [BRONZE] Python venv không tồn tại: {venv_python}")
-        venv_python = sys.executable
-    
-    spark = SparkSession.builder \
-        .appName("Kafka-to-Bronze-Iceberg") \
-        .master("local[*]") \
-        .config("spark.jars", jars_conf) \
-        .config("spark.pyspark.python", venv_python) \
-        .config("spark.pyspark.driver.python", venv_python) \
-        .config("spark.driver.memory", "4g") \
-        .config("spark.executor.memory", "4g") \
-        .config("spark.ui.port", "4040") \
-        \
-        .config("spark.hadoop.fs.s3a.endpoint", "http://localhost:9000") \
-        .config("spark.hadoop.fs.s3a.access.key", config2.MINIO_ROOT_USER) \
-        .config("spark.hadoop.fs.s3a.secret.key", config2.MINIO_ROOT_PASSWORD) \
-        .config("spark.hadoop.fs.s3a.path.style.access", "true") \
-        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
-        .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false") \
-        .config("spark.hadoop.fs.s3a.endpoint.region", "us-east-1") \
-        \
-        .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \
-        .config("spark.sql.catalog.demo", "org.apache.iceberg.spark.SparkCatalog") \
-        .config("spark.sql.catalog.demo.type", "rest") \
-        .config("spark.sql.catalog.demo.uri", "http://localhost:8181") \
-        .config("spark.sql.catalog.demo.io-impl", "org.apache.iceberg.aws.s3.S3FileIO") \
-        .config("spark.sql.catalog.demo.warehouse", config2.ICEBERG_WAREHOUSE_PATH) \
-        .config("spark.sql.catalog.demo.s3.endpoint", "http://localhost:9000") \
-        .config("spark.sql.catalog.demo.s3.path-style-access", "true") \
-        .config("spark.sql.catalog.demo.s3.access-key-id", config2.MINIO_ROOT_USER) \
-        .config("spark.sql.catalog.demo.s3.secret-access-key", config2.MINIO_ROOT_PASSWORD) \
-        .config("spark.sql.catalog.demo.client.region", "us-east-1") \
-        \
-        .config("spark.sql.defaultCatalog", "demo") \
-        .getOrCreate()
-    
-    spark.sparkContext.setLogLevel("WARN")
-    logger.info("-----> [BRONZE] Spark Session đã được khởi tạo thành công.")
-    return spark
-
+# __________________________ SCHEMA __________________________
 def load_avro_schema(schema_path: str):
+
     try:
         schema_file = Path(schema_path)
         
@@ -141,8 +45,8 @@ def load_avro_schema(schema_path: str):
         logger.error(f"-----> [BRONZE] Lỗi khi load Avro schema: {e}.")
         raise
 
-# __________________________ SCHEMA __________________________
 def get_nested_schemas():
+
     actor_schema = StructType([
         StructField("id", LongType(), True),
         StructField("login", StringType(), True),
@@ -166,6 +70,7 @@ def get_nested_schemas():
     return actor_schema, repo_schema, org_schema
 
 def get_output_schema():
+
     actor_schema, repo_schema, org_schema = get_nested_schemas()
 
     return StructType([
@@ -214,6 +119,7 @@ def create_avro_decoder_udf(avro_schema, spark_schema):
 
 # __________________________ BRONZE TABLE __________________________
 def create_bronze_table_if_not_exists(spark, catalog, namespace, table_name):
+    
     full_table_name = f"{catalog}.{namespace}.{table_name}"
     
     try: 
@@ -278,18 +184,18 @@ def run_kafka_to_bronze_pipeline(spark, avro_schema):
     # 1. Tạo bronze table
     create_bronze_table_if_not_exists(
         spark,
-        config2.ICEBERG_CATALOG,
-        config2.ICEBERG_NAMESPACE,
-        config2.ICEBERG_TABLE
+        config.ICEBERG_CATALOG,
+        config.ICEBERG_NAMESPACE,
+        config.ICEBERG_TABLE
     )
 
     # 2. Đọc stream từ Kafka (binary mode)
-    logger.info(f"-----> [BRONZE] Bắt đầu đọc từ Kafka topic: {config2.KAFKA_TOPIC}.")
+    logger.info(f"-----> [BRONZE] Bắt đầu đọc từ Kafka topic: {config.KAFKA_TOPIC}.")
     
     kafka_df = spark.readStream \
         .format("kafka") \
-        .option("kafka.bootstrap.servers", config2.KAFKA_BOOTSTRAP_SERVERS) \
-        .option("subscribe", config2.KAFKA_TOPIC) \
+        .option("kafka.bootstrap.servers", config.KAFKA_BOOTSTRAP_SERVERS) \
+        .option("subscribe", config.KAFKA_TOPIC) \
         .option("startingOffsets", "earliest") \
         .option("failOnDataLoss", "false") \
         .load()
@@ -339,16 +245,16 @@ def run_kafka_to_bronze_pipeline(spark, avro_schema):
     )
 
     # 9. Ghi vào Iceberg Bronze table
-    full_table_name = f"{config2.ICEBERG_CATALOG}.{config2.ICEBERG_NAMESPACE}.{config2.ICEBERG_TABLE}"
+    full_table_name = f"{config.ICEBERG_CATALOG}.{config.ICEBERG_NAMESPACE}.{config.ICEBERG_TABLE}"
 
     logger.info(f"-----> [BRONZE] Bắt đầu ghi dữ liệu vào {full_table_name}")
 
     query = parsed_df.writeStream \
         .format("iceberg") \
         .outputMode("append") \
-        .option("checkpointLocation", config2.CHECKPOINT_LOCATION) \
+        .option("checkpointLocation", config.CHECKPOINT_LOCATION) \
         .option("fanout-enabled", "true") \
-        .trigger(processingTime="10 seconds") \
+        .trigger(processingTime="3 minute") \
         .toTable(full_table_name)
     
     logger.info(f"-----> [BRONZE] Streaming query đã bắt đầu. Đang chờ dữ liệu")
@@ -367,11 +273,12 @@ def main():
     try:
        # 1. Khởi tạo Spark
         logger.info("-----> [BRONZE] Đang khởi tạo Spark Session...")
-        spark = create_spark_session()
+        spark_client = SparkClient(app_name="Kafka-to-Bronze", job_type="streaming")
+        spark = spark_client.get_session()
         
         # 2. Load Avro schema
         logger.info("-----> [BRONZE] Đang load Avro schema...")
-        avro_schema = load_avro_schema(config2.AVRO_SCHEMA_PATH)
+        avro_schema = load_avro_schema(config.AVRO_SCHEMA_PATH)
         
         # 3. Chạy streaming pipeline
         logger.info("-----> [BRONZE] Đang khởi động streaming pipeline...")
