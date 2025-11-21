@@ -113,7 +113,7 @@ async def run_kafka_producer_worker(shutdown_event: Optional[asyncio.Event] = No
                     item = await asyncio.wait_for(metric_queue.get(), timeout=remaining)
                     metric = item["metric"]
 
-                    if "payload" in metric and metric["payload "] is not None:
+                    if "payload" in metric and metric["payload"] is not None:
                         if not isinstance(metric["payload"], str):
                             try:
                                 metric["payload"] = json.dumps(metric["payload"])
