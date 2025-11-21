@@ -2,7 +2,7 @@ import os
 import sys
 import logging
 from pyspark.sql import SparkSession
-from spark_jobs.config_2 import Config_2
+from dags.spark_jobs.config_2 import Config_2
 
 config = Config_2()
 
