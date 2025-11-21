@@ -119,8 +119,7 @@ def create_avro_decoder_udf(avro_schema, spark_schema):
 
 # __________________________ BRONZE TABLE __________________________
 def load_sql_from_file(file_path: str, **kwargs) -> str:
-    if not os.path.exists(file_path):
-   
+    if not os.path.exists(file_path):     
         raise FileNotFoundError(f"-----> [BRONZE] Không tìm thấy file SQL tại: {file_path}")
     with open(file_path, 'r', encoding='utf-8')  as f:
         sql_content = f.read()
