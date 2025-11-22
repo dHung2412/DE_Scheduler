@@ -12,7 +12,8 @@ import json
 import logging
 from dotenv import load_dotenv
 from dags.spark_jobs.config_2 import Config_2
-from dags.utils.spark_client import SparkClient
+from dags.spark_jobs.spark_client import SparkClient
+
 load_dotenv()
 
 config = Config_2()
@@ -126,7 +127,10 @@ def load_sql_from_file(file_path: str, **kwargs) -> str:
 
     return sql_content.format(**kwargs)
 
-def create_bronze_table_if_not_exists(spark, catalog, namespace, table_name):
+def create_bronze_table_if_not_exists(spark: SparkSession, catalog: str, namespace: str, table_name: str):
+    catalog = config.ICEBERG_CATALOG
+    namespace = config.BRONZE_NAMESPACE
+    table_name = config.BRONZE_TABLE
     full_table_name = f"{catalog}.{namespace}.{table_name}"
     
     sql_file_path = r"D:\Project\Data_Engineering\DE_Scheduler\utils\sql\bronze_table.sql"
@@ -137,17 +141,21 @@ def create_bronze_table_if_not_exists(spark, catalog, namespace, table_name):
         logger.info(f"-----> [BRONZE] Đảm bảo namespace {catalog}.{namespace} tồn tại.")
         
         # 2. Xóa bảng cũ - trong dev env
-        logger.warning(f"-----> [BRONZE] Đang xóa bảng cũ {full_table_name} để cập nhật lại.")
-        spark.sql(f"DROP TABLE IF EXISTS {full_table_name}")
+        # logger.warning(f"-----> [BRONZE] Đang xóa bảng cũ {full_table_name} để cập nhật lại.")
+        # spark.sql(f"DROP TABLE IF EXISTS {full_table_name}")
+        if spark.catalog.tableExists(full_table_name):
+            logger.info(f"-----> [BRONZE] Bảng {full_table_name} đã tồn tại.")
+            return
+        logger.info(f"-----> [BRONZE] Bảng {full_table_name} chưa tồn tại.")
         
-        # 3. Tạo table
+        # 3. Tạo table theo schema
         create_table_sql = load_sql_from_file(
             str(sql_file_path),
             full_table_name = full_table_name
         )
         
         spark.sql(create_table_sql)
-        logger.info(f"-----> [BRONZE] Đảm bảo table {full_table_name} đã tồn tại.")
+        logger.info(f"-----> [BRONZE] Đã tạo table {full_table_name} đã tồn tại.")
     
     except Exception as e:
         logger.error(f"-----> [BRONZE] Lỗi khi tạo table: {e}")
@@ -160,12 +168,17 @@ def run_kafka_to_bronze_pipeline(spark, avro_schema):
     Main streaming pipeline:
     Kafka Binary → Decode Avro → Explode → Parse → Iceberg Bronze
     """
+    catalog = config.ICEBERG_CATALOG
+    namespace = config.BRONZE_NAMESPACE
+    table_name = config.BRONZE_TABLE
+    full_table_name = f"{catalog}.{namespace}.{table_name}"
+    
     # 1. Tạo bronze table
     create_bronze_table_if_not_exists(
         spark,
-        config.ICEBERG_CATALOG,
-        config.BRONZE_NAMESPACE,
-        config.BRONZE_TABLE
+        catalog,
+        namespace,
+        table_name
     )
 
     # 2. Đọc stream từ Kafka (binary mode)
