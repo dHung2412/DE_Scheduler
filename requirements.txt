@@ -1,9 +1,30 @@
-fastavro 
-dotenv
-aiokafka
-python-snappy
-fastapi
-uvicorn[standard]
+# Data Processing
 pyspark==3.3.4
-httpx
-apache-airflow==2.10.3
+pyarrow==22.0.0
+pyiceberg==0.10.0
+
+# Kafka
+kafka-python==2.3.0
+aiokafka==0.12.0
+fastavro==1.12.1
+python-snappy==0.7.3
+
+# API/Web
+fastapi==0.121.2
+uvicorn==0.38.0
+httpx==0.28.1
+
+# Utils
+dotenv==0.9.9
+
+# AWS/S3
+boto3==1.41.2
+
+# dbt - Analytics
+dbt-postgres==1.9.1
+dbt-spark==1.8.0
+
+# gRPC
+grpcio==1.76.0
+grpcio-status==1.76.0
+opentelemetry-proto==1.38.0

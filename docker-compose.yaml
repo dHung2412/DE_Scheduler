@@ -1,10 +1,10 @@
-x-airflow-common:
-  &airflow-common
-  build: ./airflow
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: ./airflow/Dockerfile
   env_file:
     - ${ENV_FILE_PATH:-.env}
-  environment:
-    &airflow-common-env
+  environment: &airflow-common-env
     # SỬ DỤNG LOCAL EXECUTOR
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
@@ -12,13 +12,15 @@ x-airflow-common:
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
     AIRFLOW__CORE__FERNET_KEY: ''
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
-    AIRFLOW__CORE__LOAD_EXAMPLES: 'false' # Tắt example cho nhanh
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    # dbt configuration
+    DBT_PROFILES_DIR: /opt/dbt_project
   volumes:
-    - ${AIRFLOW_PROJ_DIR:-.}/dags:/opt/airflow/dags
-    - ${AIRFLOW_PROJ_DIR:-.}/logs:/opt/airflow/logs
-    - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
-    - ${AIRFLOW_PROJ_DIR:-.}/dbt_project:/opt/dbt_project
-    - ${AIRFLOW_PROJ_DIR:-.}/metric_collector/app/schema:/opt/airflow/schemas
+    - ./dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+    - ./airflow/plugins:/opt/airflow/plugins
+    - ./dbt_project:/opt/dbt_project
+    - ./metric_collector/app/schema:/opt/airflow/schemas
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     &airflow-common-depends-on
@@ -29,9 +31,7 @@ x-airflow-common:
 
 # --------------------------------------------------------------------------------------
 services:
-  #################################################
-  #  POSTGRES (Airflow Meta + dbt Data Warehouse)
-  #################################################
+  #____________________POSTGRES____________________
   postgres:
     image: postgres:16
     container_name: postgres
@@ -52,12 +52,17 @@ services:
     networks:
       - data_stack_net
 
-  #################################################
-  #  AIRFLOW (LocalExecutor - Chỉ 3 service)
-  #################################################
+  #____________________AIRFLOW____________________
   airflow-init:
     <<: *airflow-common
     container_name: airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        mkdir -p /opt/airflow/logs /opt/airflow/dags /opt/airflow/plugins
+        chown -R "${AIRFLOW_UID}:0" /opt/airflow/{logs,dags,plugins}
+        exec /entrypoint airflow version
     environment:
       <<: *airflow-common-env
       _AIRFLOW_DB_MIGRATE: 'true'
@@ -66,12 +71,26 @@ services:
       _AIRFLOW_WWW_USER_PASSWORD: 'admin'
     user: "0:0"
 
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
+      - ./airflow/plugins:/opt/airflow/plugins
+    depends_on:
+      <<: *airflow-common-depends-on
+    networks:
+      - data_stack_net
+
   airflow-api-server:
     <<: *airflow-common
     container_name: airflow-api-server
     command: api-server
     ports:
-      - "8080:8080"
+      - "8082:8080"
     healthcheck:
       test: ["CMD-SHELL", "airflow info > /dev/null 2>&1"]
       interval: 30s
@@ -84,6 +103,8 @@ services:
         condition: service_healthy
       airflow-init:
         condition: service_completed_successfully
+    networks:
+      - data_stack_net
 
   airflow-scheduler:
     <<: *airflow-common
@@ -98,13 +119,28 @@ services:
     restart: always
     depends_on:
       postgres:
-       condition: service_healthy
+        condition: service_healthy
       airflow-init:
         condition: service_completed_successfully
 
-  #################################################
-  #  KAFKA STACK
-  #################################################
+  airflow-triggerer:
+    <<: *airflow-common
+    container_name: airflow-triggerer
+    command: triggerer
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type TriggererJob --hostname $$(hostname)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  #____________________KAFKA____________________
   zookeeper:
     image: confluentinc/cp-zookeeper:7.5.3
     container_name: zookeeper
@@ -131,9 +167,7 @@ services:
     networks:
       - data_stack_net
 
-  #################################################
-  #  ICEBERG STACK (Spark + REST + MinIO)
-  #################################################
+  #____________________ICEBERG____________________
   spark-iceberg:
     image: tabulario/spark-iceberg
     container_name: spark-iceberg
@@ -170,6 +204,7 @@ services:
       - CATALOG_IO__IMPL=org.apache.iceberg.aws.s3.S3FileIO
       - CATALOG_S3_ENDPOINT=http://minio:9000
 
+  #____________________MINIO____________________
   minio:
     image: minio/minio
     container_name: minio
@@ -207,9 +242,7 @@ services:
       tail -f /dev/null
       "
 
-#################################################
-#  VOLUMES & NETWORKS
-#################################################
+#____________________VOLUMES & NETWORKS____________________
 volumes:
   postgres-db-volume:
   minio-data:
