@@ -13,14 +13,32 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__FERNET_KEY: ''
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
-    # dbt configuration
-    DBT_PROFILES_DIR: /opt/dbt_project
+    
+    # dbt Configuration
+    DBT_PROFILES_DIR: /opt/dbt_profiles
+    DBT_PROJECT_DIR: /opt/dbt_project
+    DBT_TARGET: dev
+    DBT_LOG_PATH: /tmp/dbt_logs
+    DBT_TARGET_PATH: /tmp/dbt_target
+    
+    # Iceberg Configuration
+    ICEBERG_CATALOG: ${ICEBERG_CATALOG}
+    BRONZE_NAMESPACE: ${BRONZE_NAMESPACE}
+    SILVER_NAMESPACE: ${SILVER_NAMESPACE}
+    GOLD_NAMESPACE: ${GOLD_NAMESPACE}
+    SILVER_TABLE: ${SILVER_TABLE}
+    
+    # Spark Connection
+    SPARK_HOST: ${SPARK_HOST}
+    SPARK_THRIFT_PORT: ${SPARK_THRIFT_PORT}
+    SPARK_USER: ${SPARK_USER}
   volumes:
     - ./dags:/opt/airflow/dags
     - ./airflow/logs:/opt/airflow/logs
     - ./airflow/plugins:/opt/airflow/plugins
-    - ./dbt_project:/opt/dbt_project
     - ./metric_collector/app/schema:/opt/airflow/schemas
+    - ./dbt_project:/opt/dbt_project
+    - ./dbt_profiles:/opt/dbt_profiles
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     &airflow-common-depends-on
@@ -76,33 +94,8 @@ services:
     command: webserver
     ports:
       - "8080:8080"
-    volumes:
-      - ./dags:/opt/airflow/dags
-      - ./airflow/logs:/opt/airflow/logs
-      - ./airflow/plugins:/opt/airflow/plugins
     depends_on:
       <<: *airflow-common-depends-on
-    networks:
-      - data_stack_net
-
-  airflow-api-server:
-    <<: *airflow-common
-    container_name: airflow-api-server
-    command: api-server
-    ports:
-      - "8082:8080"
-    healthcheck:
-      test: ["CMD-SHELL", "airflow info > /dev/null 2>&1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    restart: always
-    depends_on:
-      postgres:
-        condition: service_healthy
-      airflow-init:
-        condition: service_completed_successfully
     networks:
       - data_stack_net
 
@@ -122,6 +115,8 @@ services:
         condition: service_healthy
       airflow-init:
         condition: service_completed_successfully
+    networks:
+      - data_stack_net
 
   airflow-triggerer:
     <<: *airflow-common
@@ -138,7 +133,9 @@ services:
       postgres:
         condition: service_healthy
       airflow-init:
-        condition: service_completed_successfully
+        condition: service_completed_successfully 
+    networks:
+      - data_stack_net
 
   #____________________KAFKA____________________
   zookeeper:
@@ -147,6 +144,9 @@ services:
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-logs:/var/lib/zookeeper/log
     networks:
       - data_stack_net
 
@@ -157,13 +157,22 @@ services:
       - zookeeper
     ports:
       - "9092:9092"
+      - "29092:29092"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,PLAINTEXT_HOST://0.0.0.0:9092
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      # Data retention settings
+      KAFKA_LOG_RETENTION_HOURS: 168        # 7 ngày
+      KAFKA_LOG_RETENTION_BYTES: 1073741824 # 1GB per partition
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824   # 1GB per segment
     networks:
       - data_stack_net
 
@@ -171,6 +180,33 @@ services:
   spark-iceberg:
     image: tabulario/spark-iceberg
     container_name: spark-iceberg
+    entrypoint: ["/bin/bash"]
+    command:
+      - -c
+      - |
+        /opt/spark/sbin/start-thriftserver.sh \
+          --master local[*] \
+          --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions \
+          --conf spark.sql.catalog.demo=org.apache.iceberg.spark.SparkCatalog \
+          --conf spark.sql.catalog.demo.type=rest \
+          --conf spark.sql.catalog.demo.uri=http://rest:8181 \
+          --conf spark.sql.catalog.demo.warehouse=s3a://warehouse/ \
+          --conf spark.sql.catalog.demo.io-impl=org.apache.iceberg.aws.s3.S3FileIO \
+          --conf spark.sql.catalog.demo.s3.endpoint=http://minio:9000 \
+          --conf spark.sql.catalog.demo.s3.path-style-access=true \
+          --conf spark.hadoop.fs.s3a.access.key=${MINIO_ROOT_USER} \
+          --conf spark.hadoop.fs.s3a.secret.key=${MINIO_ROOT_PASSWORD} \
+          --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \
+          --conf spark.hadoop.fs.s3a.path.style.access=true \
+          --conf spark.hadoop.fs.s3a.connection.ssl.enabled=false \
+          --conf spark.driver.memory=1g \
+          --conf spark.executor.memory=1g
+        
+        # Wait for Thrift Server to fully start
+        sleep 10
+        
+        # Start Jupyter in foreground to keep container alive
+        ./entrypoint.sh notebook
     networks:
       - data_stack_net
     depends_on:
@@ -184,6 +220,8 @@ services:
       - AWS_ACCESS_KEY_ID=${MINIO_ROOT_USER}
       - AWS_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}
       - AWS_REGION=us-east-1
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
     ports:
       - 8888:8888 # Jupyter
       - 8081:8080 # Spark UI
@@ -246,6 +284,9 @@ services:
 volumes:
   postgres-db-volume:
   minio-data:
+  kafka-data:
+  zookeeper-data:
+  zookeeper-logs:
 
 networks:
   data_stack_net:
