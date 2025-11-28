@@ -7,7 +7,7 @@ Daily Bronze Table Maintenance
 from datetime import datetime, timedelta
 
 from airflow import DAG
-from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
+from airflow.operators.bash import BashOperator
 
 default_args = {
     'owner': 'data_engineering',
@@ -15,7 +15,7 @@ default_args = {
     'start_date': datetime(2025, 11, 20),
     'email_on_failure': False,
     'email_on_retry': False,
-    'retries': 1,
+    'retries': 3,
     'retry_delay': timedelta(minutes=10),
 }
 
@@ -29,17 +29,16 @@ dag = DAG(
     tags=['maintenance', 'bronze', 'daily'],
 )
 
-bronze_by_day = SparkSubmitOperator(
+bronze_by_day = BashOperator(
     task_id='compact_bronze_binpack',
-    application='/opt/airflow/dags/spark_jobs/maintenance/maintenance_bronze_by_day.py',
-    name='maintenance_bronze_by_day',
-    conn_id='spark_default',
-    verbose=True,
-    conf={
-        'spark.master': 'local[2]',
-        'spark.driver.memory': '2g',
-        'spark.executor.memory': '2g',
-    },
+    bash_command="""
+    spark-submit \
+        --master local[2] \
+        --conf spark.driver.memory=2g \
+        --conf spark.executor.memory=2g \
+        --name maintenance_bronze_by_day \
+        --jars "/opt/airflow/dags/spark_jobs/utils/jars/*" \
+        /opt/airflow/dags/spark_jobs/maintenance/maintenance_bronze_by_day.py
+    """,
     dag=dag,
 )
-
