@@ -30,7 +30,11 @@ config = Config_2()
 def run_maintenace_bronze_by_day():
     logger.info(f"-----> [MAINTENANCE-BRONZE-DAY] Bắt đầu maintenance bronze by day")
 
+    spark = None
+    
     try:
+        logger.info("=" * 80)
+
         logger.info("-----> [MAINTENANCE-BRONZE-DAY] Đang khởi tạo Spark Session")
         spark_client = SparkClient(app_name="Bronze-Maintenance-Daily", job_type="batch")
         spark = spark_client.get_session()
@@ -52,7 +56,7 @@ def run_maintenace_bronze_by_day():
                 table => '{full_table_name}',
                 strategy => 'binpack',
                 options => map(
-                    'target-file-size-bytes', '20480000'),
+                    'target-file-size-bytes', '20480000',
                     'min-input-files', '5'
                 ),
                 where => "ingestion_date >= DATE '{cutoff_date}'"
@@ -78,8 +82,10 @@ def run_maintenace_bronze_by_day():
         raise
     
     finally:
-        spark.stop()
-        logger.info("-----> [MAINTENANCE-BRONZE-DAY] Spark session đã đóng")
+        logger.info("=" * 80)
+        if spark is not None:  # Only stop if spark was initialized
+            spark.stop()
+            logger.info("-----> [MAINTENANCE-BRONZE-DAY] Spark session đã đóng")
 
 if __name__ == "__main__":
     run_maintenace_bronze_by_day()

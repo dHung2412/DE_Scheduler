@@ -4,6 +4,7 @@ Bronze Table Maintenance Job - Weekly
 - Remove orphan files (> 3 ngày)
 - Rewrite position delete files
 """
+
 import logging
 import os
 import sys
@@ -91,9 +92,12 @@ def rewrite_position_deletes(spark, full_table_name, catalog):
         # Không raise vì có thể bảng không có delete files
         logger.warning(f"-----> [MAINTENANCE-BRONZE-WEEKLY] Skip rewrite position deletes - có thể table không có delete files")
 
-def run_maintenance():
+def run_maintenance_bronze_by_week():
+    logger.info(f"-----> [MAINTENANCE-BRONZE-WEEKLY] Bắt đầu maintenance bronze by week")
+
+    spark = None
+
     try:
-        logger.info(f"-----> [MAINTENANCE-BRONZE-WEEKLY] Bắt đầu maintenance bronze by days")
         logger.info("=" * 80)
 
         # 1. Khởi tạo Spark
@@ -126,8 +130,9 @@ def run_maintenance():
     
     finally:
         logger.info("=" * 80)
-        spark.stop()
-        logger.info("-----> [MAINTENANCE-BRONZE-WEEKLY] Spark session đã đóng")
+        if spark is not None:  # Only stop if spark was initialized
+            spark.stop()
+            logger.info("-----> [MAINTENANCE-BRONZE-WEEKLY] Spark session đã đóng")
 
 if __name__ == "__main__":
-    run_maintenance()
+    run_maintenance_bronze_by_week()
