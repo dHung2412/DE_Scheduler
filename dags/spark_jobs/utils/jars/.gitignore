@@ -1,0 +1,2 @@
+# Ignore JAR files (they're too large for git)
+*.jar

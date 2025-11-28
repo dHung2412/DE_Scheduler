@@ -42,5 +42,5 @@ TBLPROPERTIES (
     
     -- Snapshot retention LIMITS (không auto-cleanup)
     'history.expire.min-snapshots-to-keep' = '10',
-    'history.expire.max-snapshot-age-ms' = '86400000',  -- 1 day
+    'history.expire.max-snapshot-age-ms' = '86400000'  -- 1 day (no trailing comma)
 )
