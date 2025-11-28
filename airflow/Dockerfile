@@ -5,6 +5,11 @@ USER root
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     openjdk-17-jre-headless \
+    git \
+    gcc \
+    g++ \
+    libsasl2-dev \
+    procps \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

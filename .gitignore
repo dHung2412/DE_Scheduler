@@ -5,7 +5,7 @@
 /data
 __pycache__/
 *.pyc
-logs
+# logs
 notebooks
 plugins
 warehouse
@@ -15,3 +15,10 @@ test.py
 README.md
 run
 .agent
+profiles.yml
+docs
+__init__.py
+dbt_project/dbt_packages/dbt_utils
+.md
+.dbtignore
+dbt_profiles
