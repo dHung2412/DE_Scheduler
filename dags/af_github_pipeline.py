@@ -13,7 +13,6 @@ from datetime import datetime, timedelta
 
 from airflow import DAG
 from airflow.operators.bash import BashOperator
-from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 
 default_args = {
     'owner': 'data_engineering',
@@ -36,18 +35,17 @@ dag = DAG(
 )
 
 # Task 1: Bronze to Silver (Spark)
-bronze_to_silver = SparkSubmitOperator(
-    task_id='bronze_to_silver_transformation',
-    application='/opt/airflow/dags/spark_jobs/bronze_silver/process_bronze_to_silver.py',
-    name='bronze_to_silver_job',
-    conn_id='spark_default',
-    verbose=True,
-    conf={
-        'spark.master': 'local[2]',
-        'spark.driver.memory': '2g',
-        'spark.executor.memory': '2g',
-    },
-    application_args=[],
+bronze_to_silver = BashOperator(
+    task_id='transform_bronze_to_silver',
+    bash_command="""
+    spark-submit \
+        --master local[2] \
+        --conf spark.driver.memory=4g \
+        --conf spark.executor.memory=4g \
+        --name bronze_to_silver_job \
+        --jars "/opt/airflow/dags/spark_jobs/utils/jars/*" \
+        /opt/airflow/dags/spark_jobs/bronze_silver/process_bronze_to_silver.py
+    """,
     dag=dag,
 )
 
