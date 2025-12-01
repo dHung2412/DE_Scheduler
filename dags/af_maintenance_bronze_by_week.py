@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 
 from airflow import DAG
-from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
+from airflow.operators.bash import BashOperator
 
 default_args = {
     'owner': 'data_engineering',
@@ -23,16 +23,17 @@ dag = DAG(
     tags=['maintenance', 'bronze', 'weekly'],
 )
 
-bronze_by_week = SparkSubmitOperator(
+bronze_by_week = BashOperator(
     task_id='expire_and_cleanup',
-    base_commands="""
-        spark-submit \
+    bash_command="""
+    spark-submit \
         --master local[2] \
         --conf spark.driver.memory=4g \
         --conf spark.executor.memory=4g \
         --name maintenance_bronze_by_week \
         --jars "/opt/airflow/dags/spark_jobs/utils/jars/*" \
-        /opt/airflow/dags/spark_jobs/maintenance/maintenance_bronze_by_week.py""",
+        /opt/airflow/dags/spark_jobs/maintenance/maintenance_bronze_by_week.py
+    """,
     dag=dag,
 )
 
