@@ -13,9 +13,6 @@ CREATE TABLE IF NOT EXISTS {full_table_name} (
     repo_name STRING,
     repo_url STRING,
 
-    org_id BIGINT,
-    org_login STRING,
-
     payload_action STRING,
     payload_ref STRING,
     payload_ref_type STRING,
