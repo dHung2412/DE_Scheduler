@@ -1,5 +1,14 @@
 """
-Kafka (Binary) → UDF Decode → Array[JSON] → Explode → Parse JSON → Iceberg Bronze
+Kafka to Bronze Streaming Pipeline
+====================================
+Flow: Kafka (Avro Binary) → UDF Decode → Explode → Flatten → Iceberg Bronze
+
+Features:
+- Proper null handling for nested structs (actor, repo)
+- Flattened schema for easy querying (no nested STRUCTs)
+- Error logging in UDF for debugging
+- Partitioned by ingestion_date
+- Optimized for streaming with fanout write
 """
 import logging
 import os
@@ -67,19 +76,12 @@ def get_nested_schemas():
         StructField("name", StringType(), True),
         StructField("url", StringType(), True)
     ])
-    org_schema = StructType([
-        StructField("id", LongType(), True),
-        StructField("login", StringType(), True),
-        StructField("gravatar_id", StringType(), True),
-        StructField("url", StringType(), True),
-        StructField("avatar_url", StringType(), True)
-    ])
 
-    return actor_schema, repo_schema, org_schema
+    return actor_schema, repo_schema
 
 
 def get_output_schema():
-    actor_schema, repo_schema, org_schema = get_nested_schemas()
+    actor_schema, repo_schema = get_nested_schemas()
     return StructType([
         StructField("id", StringType(), True),
         StructField("type", StringType(), True),
@@ -88,19 +90,13 @@ def get_output_schema():
         StructField("payload", StringType(), True),
         StructField("public", BooleanType(), True),
         StructField("created_at", StringType(), True),
-        StructField("org", org_schema, True) 
     ])
 
 
-# __________________________ UDF DECODER __________________________
+# __________________________ UDF DECODER (FIXED) __________________________
 def create_avro_decoder_udf(avro_schema, spark_schema):
-    """
-    Tạo UDF để giải mã binary Avro thành array of Structs
-    """
+
     def decode_avro_batch(binary_data: bytes) -> List[dict]:
-        """
-        Decode một batch Avro binary thành list of dicts
-        """
         if binary_data is None or len(binary_data) == 0:
             return []
         
@@ -112,10 +108,37 @@ def create_avro_decoder_udf(avro_schema, spark_schema):
 
             for record in avro_reader:
                 payload_val = record.get("payload")
+
                 if isinstance(payload_val, (dict, list)):
                     record['payload'] = json.dumps(payload_val)
+
                 elif payload_val is None:
                     record['payload'] = None
+                
+                # Đảm bảo các trường actor và repo có giá trị
+                for field in ['actor', 'repo']:
+
+                    if field in record:
+                        val = record[field]
+
+                        if val is None or (isinstance(val, dict) and not val):
+                            record[field] = None
+
+                        elif isinstance(val, dict):
+                            if field in ['actor']:
+                                record[field] = {
+                                    'id': val.get('id'),
+                                    'login': val.get('login'),
+                                    'gravatar_id': val.get('gravatar_id'),
+                                    'url': val.get('url'),
+                                    'avatar_url': val.get('avatar_url')
+                                }
+                            elif field == 'repo':
+                                record[field] = {
+                                    'id': val.get('id'),
+                                    'name': val.get('name'),
+                                    'url': val.get('url')
+                                }
 
                 records.append(record)
 
@@ -123,6 +146,7 @@ def create_avro_decoder_udf(avro_schema, spark_schema):
             return records
         
         except Exception as e:
+            logger.error(f"-----> [BRONZE] Error decoding Avro batch: {e}", exc_info=True)
             return []
     
     return udf(decode_avro_batch, ArrayType(spark_schema))
@@ -152,9 +176,7 @@ def create_bronze_table_if_not_exists(spark: SparkSession, catalog: str, namespa
         spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {catalog}.{namespace}")
         logger.info(f"-----> [BRONZE] Đảm bảo namespace {catalog}.{namespace} tồn tại.")
         
-        # 2. Xóa bảng cũ - trong dev env
-        # logger.warning(f"-----> [BRONZE] Đang xóa bảng cũ {full_table_name} để cập nhật lại.")
-        # spark.sql(f"DROP TABLE IF EXISTS {full_table_name}")
+        # 2. Kiểm tra bảng đã tồn tại chưa
         if spark.catalog.tableExists(full_table_name):
             logger.info(f"-----> [BRONZE] Bảng {full_table_name} đã tồn tại.")
             return
@@ -167,7 +189,7 @@ def create_bronze_table_if_not_exists(spark: SparkSession, catalog: str, namespa
         )
         
         spark.sql(create_table_sql)
-        logger.info(f"-----> [BRONZE] Đã tạo table {full_table_name} đã tồn tại.")
+        logger.info(f"-----> [BRONZE] Đã tạo table {full_table_name}.")
     
     except Exception as e:
         logger.error(f"-----> [BRONZE] Lỗi khi tạo table: {e}")
@@ -177,8 +199,7 @@ def create_bronze_table_if_not_exists(spark: SparkSession, catalog: str, namespa
 # __________________________ MAIN STREAMING PIPELINE __________________________
 def run_kafka_to_bronze_pipeline(spark, avro_schema):
     """
-    Main streaming pipeline:
-    Kafka Binary → Decode Avro → Explode → Parse → Iceberg Bronze
+    Flow: Kafka (Avro Binary) → UDF Decode → Explode → Flatten → Iceberg Bronze
     """
     catalog = config.ICEBERG_CATALOG
     namespace = config.BRONZE_NAMESPACE
@@ -231,19 +252,29 @@ def run_kafka_to_bronze_pipeline(spark, avro_schema):
     
     # 8. Làm phẳng Struct
     parsed_df = with_ts_df.select(
-        col("data.id"),
-        col("data.type"),
-        col("data.actor"),
-        col("data.repo"),
-        col("data.payload"),
-        col("data.public"),
-        col("data.created_at"),
-        col("data.org"),
-        col("ingestion_timestamp"),
-        col("ingestion_date"),
-        col("kafka_partition"),
-        col("kafka_offset")
-    )
+    col("data.id"),
+    col("data.type"),
+    
+    # Flatten actor struct
+    col("data.actor.id").alias("actor_id"),
+    col("data.actor.login").alias("actor_login"),
+    col("data.actor.gravatar_id").alias("actor_gravatar_id"),
+    col("data.actor.url").alias("actor_url"),
+    col("data.actor.avatar_url").alias("actor_avatar_url"),
+    
+    # Flatten repo struct
+    col("data.repo.id").alias("repo_id"),
+    col("data.repo.name").alias("repo_name"),
+    col("data.repo.url").alias("repo_url"),
+    
+    col("data.payload"),
+    col("data.public"),
+    col("data.created_at"),
+    col("ingestion_timestamp"),
+    col("ingestion_date"),
+    col("kafka_partition"),
+    col("kafka_offset")
+)
 
     # 9. Ghi vào Iceberg Bronze table
     full_table_name = f"{config.ICEBERG_CATALOG}.{config.BRONZE_NAMESPACE}.{config.BRONZE_TABLE}"
@@ -258,21 +289,13 @@ def run_kafka_to_bronze_pipeline(spark, avro_schema):
         .toTable(full_table_name)
     logger.info(f"-----> [BRONZE] Streaming query đã bắt đầu. Đang chờ dữ liệu")
 
-    # logger.info(f"-----> [DEBUG MODE] Đang ghi dữ liệu ra CONSOLE để kiểm tra...")
-    # query = parsed_df.writeStream \
-    #     .format("console") \
-    #     .outputMode("append") \
-    #     .option("truncate", "false") \
-    #     .trigger(processingTime="5 seconds") \
-    #     .start()
-
     return query
 
 def main():
     try:
        # 1. Khởi tạo Spark
         logger.info("-----> [BRONZE] Đang khởi tạo Spark Session...")
-        spark_client = SparkClient(app_name="Kafka-to-Bronze", job_type="streaming")
+        spark_client = SparkClient(app_name="Kafka-to-Bronze-Fixed", job_type="streaming")
         spark = spark_client.get_session()
         
         # 2. Load Avro schema
