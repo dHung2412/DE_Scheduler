@@ -19,6 +19,7 @@ sys.path.append(parent_dir)
 
 from config_2 import Config_2
 from spark_client import SparkClient
+from utils.helper.load_sql import load_sql_from_file
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (col, from_json, to_timestamp, to_date, when, lit, coalesce, current_timestamp, get_json_object)
@@ -88,16 +89,6 @@ def get_unified_payload_schema():
     ])
 
 # __________________________ SILVER TABLE __________________________
-def load_sql_from_file(file_path: str, **kwargs) -> str:
-    if not os.path.exists(file_path):     
-        raise FileNotFoundError(f"-----> [SILVER] Không tìm thấy file SQL tại: {file_path}")
-    
-    with open(file_path, 'r', encoding='utf-8')  as f:
-        sql_content = f.read()
-
-    return sql_content.format(**kwargs)
-
-
 def create_silver_table_if_not_exists(spark: SparkSession):
     catalog = config.ICEBERG_CATALOG
     namespace = config.SILVER_NAMESPACE
