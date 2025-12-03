@@ -27,8 +27,9 @@ from dotenv import load_dotenv
 
 from config_2 import Config_2
 from spark_client import SparkClient
+from utils.helper.load_sql import load_sql_from_file
 
-from pyspark.sql.functions import udf, col, explode, current_timestamp, to_date
+from pyspark.sql.functions import udf, col, explode, current_timestamp, to_date, collect_set
 from pyspark.sql.types import ArrayType, StringType, StructType, StructField, LongType, BooleanType
 from pyspark.sql import SparkSession
 
@@ -65,16 +66,16 @@ def load_avro_schema(schema_path: str):
 
 def get_nested_schemas():
     actor_schema = StructType([
-        StructField("id", LongType(), True),
-        StructField("login", StringType(), True),
-        StructField("gravatar_id", StringType(), True),
-        StructField("url", StringType(), True),
-        StructField("avatar_url", StringType(), True)
+        StructField("id", LongType(), False),
+        StructField("login", StringType(), False),
+        StructField("gravatar_id", StringType(), False),
+        StructField("url", StringType(), False),
+        StructField("avatar_url", StringType(), False)
     ])
     repo_schema = StructType([
-        StructField("id", LongType(), True),
-        StructField("name", StringType(), True),
-        StructField("url", StringType(), True)
+        StructField("id", LongType(), False),
+        StructField("name", StringType(), False),
+        StructField("url", StringType(), False)
     ])
 
     return actor_schema, repo_schema
@@ -93,7 +94,7 @@ def get_output_schema():
     ])
 
 
-# __________________________ UDF DECODER (FIXED) __________________________
+# __________________________ UDF DECODER __________________________
 def create_avro_decoder_udf(avro_schema, spark_schema):
 
     def decode_avro_batch(binary_data: bytes) -> List[dict]:
@@ -142,7 +143,7 @@ def create_avro_decoder_udf(avro_schema, spark_schema):
 
                 records.append(record)
 
-            logger.debug(f"-----> [BRONZE] Decoded {len(records)} records from Avro batch")
+            logger.info(f"-----> [BRONZE] Decoded {len(records)} records from Avro batch")
             return records
         
         except Exception as e:
@@ -153,14 +154,6 @@ def create_avro_decoder_udf(avro_schema, spark_schema):
 
 
 # __________________________ BRONZE TABLE __________________________
-def load_sql_from_file(file_path: str, **kwargs) -> str:
-    if not os.path.exists(file_path):     
-        raise FileNotFoundError(f"-----> [BRONZE] Không tìm thấy file SQL tại: {file_path}")
-    with open(file_path, 'r', encoding='utf-8')  as f:
-        sql_content = f.read()
-
-    return sql_content.format(**kwargs)
-
 def create_bronze_table_if_not_exists(spark: SparkSession, catalog: str, namespace: str, table_name: str):
     catalog = config.ICEBERG_CATALOG
     namespace = config.BRONZE_NAMESPACE
@@ -197,6 +190,52 @@ def create_bronze_table_if_not_exists(spark: SparkSession, catalog: str, namespa
     
 
 # __________________________ MAIN STREAMING PIPELINE __________________________
+def write_batch_to_bronze(batch_df, batch_id):
+    # Local reference để tránh vấn đề serialization
+    target_table = table_name
+    
+    try:
+        # Cache để tránh scan lại data nhiều lần
+        batch_df.cache()
+        record_count = batch_df.count()
+        
+        if record_count == 0:
+            logger.info(f"-----> [BRONZE] Batch {batch_id}: Không có dữ liệu mới từ Kafka")
+            batch_df.unpersist()
+            return
+        
+        # Log thông tin nhận dữ liệu từ Kafka
+        logger.info(f"-----> [BRONZE] Batch {batch_id}: Nhận {record_count} records từ Kafka")
+        
+        # Lấy thông tin kafka partition bằng aggregate
+        try:
+            kafka_partitions = batch_df.select(collect_set("kafka_partition").alias("partitions")).first()
+            if kafka_partitions and kafka_partitions.partitions:
+                partitions_list = sorted(kafka_partitions.partitions)
+                logger.info(f"-----> [BRONZE] Batch {batch_id}: Kafka partitions: {partitions_list}")
+        except Exception as e:
+            logger.warning(f"-----> [BRONZE] Batch {batch_id}: Không thể lấy thông tin Kafka partition: {e}")
+        
+        # Ghi dữ liệu vào Bronze table
+        logger.info(f"-----> [BRONZE] Batch {batch_id}: Đang ghi {record_count} records vào {target_table}...")
+        
+        batch_df.writeTo(target_table) \
+            .option("fanout-enabled", "true") \
+            .append()
+        
+        logger.info(f"-----> [BRONZE] Batch {batch_id}: Đã ghi thành công {record_count} records vào Bronze")
+        
+    except Exception as e:
+        logger.error(f"-----> [BRONZE] Batch {batch_id}: Lỗi khi ghi dữ liệu: {e}", exc_info=True)
+        raise
+    finally:
+        # Giải phóng bộ nhớ
+        try:
+            batch_df.unpersist()
+        except:
+            pass
+
+
 def run_kafka_to_bronze_pipeline(spark, avro_schema):
     """
     Flow: Kafka (Avro Binary) → UDF Decode → Explode → Flatten → Iceberg Bronze
@@ -277,17 +316,16 @@ def run_kafka_to_bronze_pipeline(spark, avro_schema):
 )
 
     # 9. Ghi vào Iceberg Bronze table
-    full_table_name = f"{config.ICEBERG_CATALOG}.{config.BRONZE_NAMESPACE}.{config.BRONZE_TABLE}"
-    logger.info(f"-----> [BRONZE] Bắt đầu ghi dữ liệu vào {full_table_name}")
+    table_name = f"{config.ICEBERG_CATALOG}.{config.BRONZE_NAMESPACE}.{config.BRONZE_TABLE}"
+    logger.info(f"-----> [BRONZE] Bắt đầu ghi dữ liệu vào {table_name}")
 
     query = parsed_df.writeStream \
-        .format("iceberg") \
-        .outputMode("append") \
+        .foreachBatch(write_batch_to_bronze) \
         .option("checkpointLocation", config.BRONZE_CHECKPOINT_LOCATION) \
-        .option("fanout-enabled", "true") \
         .trigger(processingTime="30 seconds") \
-        .toTable(full_table_name)
-    logger.info(f"-----> [BRONZE] Streaming query đã bắt đầu. Đang chờ dữ liệu")
+        .start()
+    
+    logger.info(f"-----> [BRONZE] Streaming query đã bắt đầu. Đang chờ dữ liệu từ Kafka...")
 
     return query
 
