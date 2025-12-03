@@ -13,9 +13,9 @@ config = Config_2()
 class SparkClient:
     def __init__(self, app_name: str, job_type: str = "batch"):
         """
-        app_name
-        job_type: 'streaming' -> Tốn tài nguyên
-                  'batch' -> Tiết kiệm tài nguyên
+        job_type: 
+            'streaming' -> Tốn tài nguyên
+            'batch'     -> Tiết kiệm tài nguyên
         """
         self.app_name = app_name
         self.job_type = job_type
@@ -27,8 +27,15 @@ class SparkClient:
         os.environ['PYSPARK_DRIVER_PYTHON'] = sys.executable
     
     def get_session(self):
-        
         self.logger.info(f"-----> [SPARK_CLIENT] [{self.app_name}] Khởi tạo Spark Session ({self.job_type})...")    
+
+        is_docker = os.getenv("HOSTNAME") is not None and not os.getenv("HOSTNAME").startswith("DESKTOP")
+        
+        minio_host = "minio:9000" if is_docker else "localhost:9000"
+        rest_host = "rest:8181" if is_docker else "localhost:8181"
+        
+        self.logger.info(f"-----> [SPARK_CLIENT] Environment: {'Docker' if is_docker else 'Local'}")
+        self.logger.info(f"-----> [SPARK_CLIENT] MinIO: {minio_host}, REST Catalog: {rest_host}")
 
         master_conf = "local[*]" if self.job_type == "streaming" else "local[2]"
 
@@ -36,7 +43,7 @@ class SparkClient:
             .appName(self.app_name) \
             .master(master_conf) \
             \
-            .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000") \
+            .config("spark.hadoop.fs.s3a.endpoint", f"http://{minio_host}") \
             .config("spark.hadoop.fs.s3a.access.key", config.MINIO_ROOT_USER) \
             .config("spark.hadoop.fs.s3a.secret.key", config.MINIO_ROOT_PASSWORD) \
             .config("spark.hadoop.fs.s3a.path.style.access", "true") \
@@ -48,10 +55,10 @@ class SparkClient:
             .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions") \
             .config("spark.sql.catalog.demo", "org.apache.iceberg.spark.SparkCatalog") \
             .config("spark.sql.catalog.demo.type", "rest") \
-            .config("spark.sql.catalog.demo.uri", "http://rest:8181") \
+            .config("spark.sql.catalog.demo.uri", f"http://{rest_host}") \
             .config("spark.sql.catalog.demo.warehouse", config.ICEBERG_WAREHOUSE_PATH) \
             .config("spark.sql.catalog.demo.io-impl", "org.apache.iceberg.aws.s3.S3FileIO") \
-            .config("spark.sql.catalog.demo.s3.endpoint", "http://minio:9000") \
+            .config("spark.sql.catalog.demo.s3.endpoint", f"http://{minio_host}") \
             .config("spark.sql.catalog.demo.s3.path-style-access", "true") \
             .config("spark.sql.catalog.demo.s3.connection.ssl.enabled", "false") \
             .config("spark.sql.catalog.demo.s3.access-key-id", config.MINIO_ROOT_USER) \
