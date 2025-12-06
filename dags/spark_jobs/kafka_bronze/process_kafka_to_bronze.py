@@ -190,9 +190,9 @@ def create_bronze_table_if_not_exists(spark: SparkSession, catalog: str, namespa
     
 
 # __________________________ MAIN STREAMING PIPELINE __________________________
-def write_batch_to_bronze(batch_df, batch_id):
+def write_batch_to_bronze(batch_df, batch_id, full_table_name):
     # Local reference để tránh vấn đề serialization
-    target_table = table_name
+    target_table = full_table_name
     
     try:
         # Cache để tránh scan lại data nhiều lần
@@ -316,11 +316,11 @@ def run_kafka_to_bronze_pipeline(spark, avro_schema):
 )
 
     # 9. Ghi vào Iceberg Bronze table
-    table_name = f"{config.ICEBERG_CATALOG}.{config.BRONZE_NAMESPACE}.{config.BRONZE_TABLE}"
-    logger.info(f"-----> [BRONZE] Bắt đầu ghi dữ liệu vào {table_name}")
+    full_table_name = f"{config.ICEBERG_CATALOG}.{config.BRONZE_NAMESPACE}.{config.BRONZE_TABLE}"
+    logger.info(f"-----> [BRONZE] Bắt đầu ghi dữ liệu vào {full_table_name}")
 
     query = parsed_df.writeStream \
-        .foreachBatch(write_batch_to_bronze) \
+        .foreachBatch(lambda batch_df, batch_id: write_batch_to_bronze(batch_df, batch_id, full_table_name)) \
         .option("checkpointLocation", config.BRONZE_CHECKPOINT_LOCATION) \
         .trigger(processingTime="30 seconds") \
         .start()
@@ -333,7 +333,7 @@ def main():
     try:
        # 1. Khởi tạo Spark
         logger.info("-----> [BRONZE] Đang khởi tạo Spark Session...")
-        spark_client = SparkClient(app_name="Kafka-to-Bronze-Fixed", job_type="streaming")
+        spark_client = SparkClient(app_name="Kafka-to-Bronze", job_type="streaming")
         spark = spark_client.get_session()
         
         # 2. Load Avro schema
