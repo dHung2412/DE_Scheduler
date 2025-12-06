@@ -1,0 +1,55 @@
+name: 'github_analytics'
+version: '1.0.0'
+config-version: 2
+
+profile: 'github_analytics'
+
+vars:
+  iceberg_catalog: "{{ env_var('ICEBERG_CATALOG', 'demo') }}"
+  silver_namespace: "{{ env_var('SILVER_NAMESPACE', 'silver') }}"
+  gold_namespace: "{{ env_var('GOLD_NAMESPACE', 'gold') }}"
+  bronze_namespace: "{{ env_var('BRONZE_NAMESPACE', 'bronze') }}"
+
+model-paths: ["models"]
+test-paths:  ["tests"]
+macro-paths: ["macros"]
+docs-paths:  ["docs"]
+
+# Build directory
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# Query comment configuration (disable for Spark compatibility)
+query-comment: ""
+
+# Models configuration
+models:
+  github_analytics:
+    # Silver models - incremental with merge
+    silver:
+      +materialized: incremental
+      +schema: silver
+      +on_schema_change: sync_all_columns
+      +incremental_strategy: merge
+      +file_format: iceberg
+      +unique_key: event_id
+      
+    # Gold models - table materialization
+    gold:
+      +materialized: table
+      +schema: gold
+      +file_format: iceberg
+
+# Seeds configuration
+seeds:
+  github_analytics:
+    +quote_columns: false
+    +schema: "seeds"
+
+# Tests
+tests:
+  github_analytics:
+    +store_failures: true
+    +schema: "test_failures"

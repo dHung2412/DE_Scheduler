@@ -1,0 +1,128 @@
+version: 2
+
+sources:
+  - name: silver
+    description: "Silver layer tables từ Spark processing"
+    schema: "silver"
+    
+    freshness:
+      warn_after: {count: 2, period: hour}   # Dữ liệu cũ hơn 2 giờ -> Warning
+      error_after: {count: 6, period: hour}  # Dữ liệu cũ hơn 6 giờ -> Error
+    
+    tables:
+      - name: github_events_parsed
+        description: "Parsed GitHub events từ Bronze layer"
+        
+        loaded_at_field: processed_at
+        
+        columns:
+          - name: event_id
+            description: "Unique event identifier"
+            tests:
+              - not_null
+              - unique
+          - name: event_type
+            description: "Type of GitHub event (PushEvent, PullRequestEvent, etc.)"
+            tests:
+              - not_null
+          - name: created_at
+            description: "Event creation timestamp"
+            tests:
+              - not_null
+          - name: processed_at
+            description: "Processing timestamp for incremental load"
+            tests:
+              - not_null
+
+# Models documentation
+models:
+  # Silver models
+  - name: silver_github_events
+    description: "Cleaned and enriched GitHub events with computed fields"
+    columns:
+      - name: event_id
+        description: "Unique event identifier"
+        tests:
+          - not_null
+          - unique
+      - name: event_type
+        description: "Type of GitHub event"
+        tests:
+          - not_null
+          - accepted_values:
+              values: ['PushEvent', 'PullRequestEvent', 'IssuesEvent', 'WatchEvent', 
+                       'ForkEvent', 'CreateEvent', 'DeleteEvent', 'ReleaseEvent',
+                       'IssueCommentEvent', 'MemberEvent', 'PullRequestReviewEvent',
+                       'PullRequestReviewCommentEvent', 'CommitCommentEvent']
+      - name: event_category
+        description: "Categorized event type (code_change, pull_request, issue, social, etc.)"
+        tests:
+          - accepted_values:
+              values: ['code_change', 'pull_request', 'issue', 'social', 'repo_management', 'release', 'other']
+      - name: actor_login
+        description: "GitHub username of the actor"
+        tests:
+          - not_null
+      - name: repo_name
+        description: "Full repository name (owner/repo)"
+        tests:
+          - not_null
+      - name: event_date
+        description: "Date of the event (for partitioning)"
+        tests:
+          - not_null
+      - name: activity_score
+        description: "Computed activity score based on event type and details"
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              inclusive: true
+
+  # Gold models
+  - name: gold_user_activity
+    description: "Daily aggregated user activity metrics with trends and classifications"
+    columns:
+      - name: actor_id
+        description: "GitHub user ID"
+        tests:
+          - not_null
+      - name: actor_login
+        description: "GitHub username"
+        tests:
+          - not_null
+      - name: activity_date
+        description: "Date of activity"
+        tests:
+          - not_null
+      - name: total_events
+        description: "Total number of events for the user on this date"
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              inclusive: true
+      - name: total_commits
+        description: "Total commits pushed by user"
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              inclusive: true
+      - name: user_activity_level
+        description: "Classification of user activity level"
+        tests:
+          - accepted_values:
+              values: ['highly_active', 'active', 'moderate', 'low_activity']
+      - name: user_specialization
+        description: "User specialization based on event distribution"
+        tests:
+          - accepted_values:
+              values: ['developer', 'reviewer', 'issue_manager', 'community_member', 'generalist']
+
+# Custom tests
+tests:
+  - name: event_id_uniqueness_across_dates
+    description: "Ensure event_id is globally unique across all dates"
+    
+  - name: no_future_events
+    description: "Ensure no events have future timestamps"
