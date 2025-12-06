@@ -184,26 +184,35 @@ services:
     command:
       - -c
       - |
+        SPARK_OPTS="--conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions \
+        --conf spark.sql.catalog.demo=org.apache.iceberg.spark.SparkCatalog \
+        --conf spark.sql.catalog.demo.type=rest \
+        --conf spark.sql.catalog.demo.uri=http://rest:8181 \
+        --conf spark.sql.catalog.demo.warehouse=s3a://warehouse/ \
+        --conf spark.sql.catalog.demo.io-impl=org.apache.iceberg.aws.s3.S3FileIO \
+        --conf spark.sql.catalog.demo.s3.endpoint=http://minio:9000 \
+        --conf spark.sql.catalog.demo.s3.path-style-access=true \
+        --conf spark.hadoop.fs.s3a.access.key=$${MINIO_ROOT_USER} \
+        --conf spark.hadoop.fs.s3a.secret.key=$${MINIO_ROOT_PASSWORD} \
+        --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \
+        --conf spark.hadoop.fs.s3a.path.style.access=true \
+        --conf spark.hadoop.fs.s3a.connection.ssl.enabled=false \
+        --conf spark.sql.defaultCatalog=demo"
+
         /opt/spark/sbin/start-thriftserver.sh \
           --master local[*] \
-          --conf spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions \
-          --conf spark.sql.catalog.demo=org.apache.iceberg.spark.SparkCatalog \
-          --conf spark.sql.catalog.demo.type=rest \
-          --conf spark.sql.catalog.demo.uri=http://rest:8181 \
-          --conf spark.sql.catalog.demo.warehouse=s3a://warehouse/ \
-          --conf spark.sql.catalog.demo.io-impl=org.apache.iceberg.aws.s3.S3FileIO \
-          --conf spark.sql.catalog.demo.s3.endpoint=http://minio:9000 \
-          --conf spark.sql.catalog.demo.s3.path-style-access=true \
-          --conf spark.hadoop.fs.s3a.access.key=${MINIO_ROOT_USER} \
-          --conf spark.hadoop.fs.s3a.secret.key=${MINIO_ROOT_PASSWORD} \
-          --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 \
-          --conf spark.hadoop.fs.s3a.path.style.access=true \
-          --conf spark.hadoop.fs.s3a.connection.ssl.enabled=false \
+          $$SPARK_OPTS \
           --conf spark.driver.memory=1g \
           --conf spark.executor.memory=1g
         
         # Wait for Thrift Server to fully start
         sleep 10
+        
+        # Initialize infrastructure schemas
+        spark-sql --master local[*] $$SPARK_OPTS -e "CREATE NAMESPACE IF NOT EXISTS demo.default;"
+        spark-sql --master local[*] $$SPARK_OPTS -e "CREATE NAMESPACE IF NOT EXISTS demo.bronze;"
+        spark-sql --master local[*] $$SPARK_OPTS -e "CREATE NAMESPACE IF NOT EXISTS demo.silver;"
+        spark-sql --master local[*] $$SPARK_OPTS -e "CREATE NAMESPACE IF NOT EXISTS demo.gold;"
         
         # Start Jupyter in foreground to keep container alive
         ./entrypoint.sh notebook
