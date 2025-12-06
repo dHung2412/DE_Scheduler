@@ -59,7 +59,7 @@ dbt_run_silver = BashOperator(
 # Task 3: dbt run - Gold models
 dbt_run_gold = BashOperator(
     task_id='dbt_run_gold_models',
-    bash_command='cd /opt/dbt_project && dbt run --models gold+',
+    bash_command='cd /opt/dbt_project && dbt run --select gold+ --target dev',
     dag=dag,
 )
 
