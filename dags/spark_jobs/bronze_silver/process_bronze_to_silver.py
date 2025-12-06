@@ -104,8 +104,18 @@ def create_silver_table_if_not_exists(spark: SparkSession):
         spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {catalog}.{namespace}")
         logger.info(f"-----> [SILVER] Đảm bảo namespace {catalog}.{namespace} tồn tại")
         
-        # 2. Check if table exists
-        if spark.catalog.tableExists(full_table_name):
+        # 2. Check if table exists (Handle corrupted metadata)
+        table_exists = False
+        try:
+            if spark.catalog.tableExists(full_table_name):
+                table_exists = True
+        except Exception as e:
+            logger.warning(f"-----> [SILVER] Metadata lỗi hoặc không đồng bộ: {e}")
+            logger.warning(f"-----> [SILVER] Tiến hành DROP table {full_table_name} để tạo lại.")
+            spark.sql(f"DROP TABLE IF EXISTS {full_table_name} PURGE")
+            table_exists = False
+
+        if table_exists:
             logger.info(f"-----> [SILVER] Table {full_table_name} đã tồn tại.")
             return
         
@@ -207,15 +217,13 @@ def run_process_bronze_to_silver(spark: SparkSession):
         col("type").alias("event_type"),
         col("created_at_ts").alias("created_at"),
         col("public"),
-        col("actor.id").alias("actor_id"),
-        col("actor.login").alias("actor_login"),
-        col("actor.url").alias("actor_url"),
-        col("actor.avatar_url").alias("actor_avatar_url"),
-        col("repo.id").alias("repo_id"),
-        col("repo.name").alias("repo_name"),
-        col("repo.url").alias("repo_url"),
-        col("org.id").alias("org_id"),
-        col("org.login").alias("org_login"),
+        col("actor_id"),
+        col("actor_login"),
+        col("actor_url"),
+        col("actor_avatar_url"),
+        col("repo_id"),
+        col("repo_name"),
+        col("repo_url"),
         
         # --- Ingestion Meta ---
         col("ingestion_date"),
@@ -238,9 +246,17 @@ def run_process_bronze_to_silver(spark: SparkSession):
 
     logger.info(f"-----> [SILVER] Writing data to {silver_table}")
 
-    silver_df.sortWithinPartitions("ingestion_date", "event_type") \
-        .writeTo(silver_table) \
-        .append()
+    silver_df.createOrReplaceTempView("batch_source_data")
+    
+    merge_sql = f"""
+    MERGE INTO {silver_table} AS target
+    USING batch_source_data AS source
+    ON target.event_id = source.event_id
+    WHEN NOT MATCHED THEN
+        INSERT *
+    """
+    
+    spark.sql(merge_sql)
 
     logger.info(f"-----> [SILVER] Pipeline hoàn tất!")
 
