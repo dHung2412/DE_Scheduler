@@ -40,8 +40,8 @@ bronze_to_silver = BashOperator(
     bash_command="""
     spark-submit \
         --master local[2] \
-        --conf spark.driver.memory=4g \
-        --conf spark.executor.memory=4g \
+        --conf spark.driver.memory=2g \
+        --conf spark.executor.memory=2g \
         --name bronze_to_silver_job \
         --jars "/opt/airflow/dags/spark_jobs/utils/jars/*" \
         /opt/airflow/dags/spark_jobs/bronze_silver/process_bronze_to_silver.py
@@ -52,7 +52,7 @@ bronze_to_silver = BashOperator(
 # Task 2: dbt run - Silver models
 dbt_run_silver = BashOperator(
     task_id='dbt_run_silver_models',
-    bash_command='cd /opt/dbt_project && dbt run --models silver+',
+    bash_command='cd /opt/dbt_project && dbt run --select silver+ --target dev',
     dag=dag,
 )
 
