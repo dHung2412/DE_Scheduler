@@ -41,12 +41,6 @@
     },
 
     { "name": "public", "type": "boolean" },
-    { "name": "created_at", "type": "string" },
-
-    {
-      "name": "org",
-      "type": ["null", "string"],
-      "doc": "Trường này có thể null"
-    }
+    { "name": "created_at", "type": "string" }
   ]
 }
