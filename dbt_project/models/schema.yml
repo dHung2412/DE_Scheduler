@@ -53,7 +53,8 @@ models:
               values: ['PushEvent', 'PullRequestEvent', 'IssuesEvent', 'WatchEvent', 
                        'ForkEvent', 'CreateEvent', 'DeleteEvent', 'ReleaseEvent',
                        'IssueCommentEvent', 'MemberEvent', 'PullRequestReviewEvent',
-                       'PullRequestReviewCommentEvent', 'CommitCommentEvent']
+                       'PullRequestReviewCommentEvent', 'CommitCommentEvent',
+                       'GollumEvent', 'PublicEvent']
       - name: event_category
         description: "Categorized event type (code_change, pull_request, issue, social, etc.)"
         tests:
