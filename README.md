@@ -21,14 +21,19 @@ Dự án này triển khai một Data Pipeline toàn diện (End-to-End), đư�
 ## 🏗 Kiến trúc hệ thống (Architecture)
 Hệ thống sử dụng kiến trúc **Lambda Architecture** giản lược, kết hợp giữa Streaming (Ingestion) và Batch (Processing).
 
+![Pipeline Architecture](./utils/pipeline.png)
+
 ### Detailed Pipeline Flow
 
-**1. Ingestion Layer: API & Kafka (High Throughput)**
-*   **API**: Nhận payload JSON -> Gán UUID (`event_id`) để trace gói tin -> Đẩy vào `metrics_queue` -> Trả về 'Success' ngay lập tức (Non-blocking I/O).
-*   **Producer**:
-    *   Gom metrics từ queue thành Batch (theo size hoặc thời gian).
-    *   Serialize sang **Avro** (nén Snappy) để tối ưu băng thông.
-    *   Cơ chế **Retry** và **Fallback** (ghi file local) đảm bảo không mất dữ liệu.
+**1. Ingestion Layer: API & Kafka (High Throughput & Reliability)**
+*   **API Gateway**: Thiết kế theo hướng **Non-blocking I/O** & **Fail-Fast**.
+    *   Nhận payload JSON -> Gán Trace ID (`event_id`) -> Đẩy vào Memory Queue (`put_nowait`).
+    *   Phản hồi client tức thì với độ trễ cực thấp (<10ms).
+    *   Cơ chế **Backpressure**: Trả về `503 Service Unavailable` khi hàng đợi đầy để bảo vệ tài nguyên server.
+*   **Producer Worker**:
+    *   **Hybrid Batching Strategy**: Tự động chuyển đổi giữa 'Polling' (High Load) và 'Waiting' (Low Latency) để tối ưu throughput.
+    *   **Non-blocking Serialization**: Dùng `run_in_executor` để đẩy tác vụ nén Avro (CPU-bound) sang thread riêng, giữ cho Event Loop luôn mượt mà.
+    *   **Data Durability**: Cơ chế Retry kết hợp **Local Fallback** giúp đảm bảo không mất mát dữ liệu (Zero Data Loss) kể cả khi Kafka gặp sự cố.
 
 **2. Bronze Layer: Streaming Ingestion (Kafka -> Iceberg)**
 *   Spark Structured Streaming đọc liên tục từ Kafka topic.
