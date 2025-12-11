@@ -9,14 +9,10 @@ import os
 
 from .config_1 import Config_1
 from .kafka_producer import run_kafka_producer_worker
-from .shared_queue import (
-    metric_queue,
-    setup_signal_handlers,
-    _shutdown_event,
-    check_queue_pressure
-)
+from .shared_queue import shared_queue
 
-config1 = Config_1()
+config = Config_1()
+
 logging.basicConfig(level=logging.INFO,
                     format = '%(asctime)s [%(levelname)s] %(message)s',
                     datefmt='%Y-%m-%d %H:%M:%S')
@@ -31,10 +27,10 @@ async def lifespan(app: FastAPI):
     logging.info("-----> [LIFESPAN] Ứng dụng đang khởi động...")
 
     # 1. Ctrl + C sẽ kích hoạt shutdown event
-    setup_signal_handlers()
+    shared_queue.setup_signal_handlers()
 
     # 2. Khởi động worker Kafka Producer
-    worker_task = asyncio.create_task(run_kafka_producer_worker(_shutdown_event))
+    worker_task = asyncio.create_task(run_kafka_producer_worker(shared_queue.shutdown_event))
 
     yield
 
@@ -42,18 +38,17 @@ async def lifespan(app: FastAPI):
     logging.warning("-----> [LIFESPAN] Ứng dụng đang tắt...")
 
     # 1. Đảm bảo event shutdown được set
-    if not _shutdown_event.is_set():
+    if not shared_queue.shutdown_event.is_set():
         logging.warning("-----> [LIFESPAN] Tắt không do signal, set event thủ công")
-        _shutdown_event.set()
+        shared_queue.shutdown_event.set()
     
     # 2. Chờ worker Kafka Producer hoàn thành 
     if worker_task:
         logging.info("-----> [LIFESPAN] Chờ worker Kafka Producer hoàn thành...")
-
+        
         try:
             await worker_task
             logging.info("-----> [LIFESPAN] Worker Kafka Producer đã hoàn thành.")
-
         except Exception as e:
             logging.error(f"-----> [LIFESPAN] Lỗi khi chờ worker Kafka Producer: {e}")
 
@@ -70,7 +65,7 @@ app = FastAPI(
 #______________________________API ENDPOINTS______________________________
 @app.post("/collect")
 async def collect_metric(request: Request):
-    """"Chỉ nhận metric và validate JSON schema, sau đó đưa vào queue."""
+    """Chỉ nhận metric và validate JSON schema, sau đó đưa vào queue."""
     try:
         # 1. Nhận và parse JSON
         metric_data = await request.json()
@@ -88,11 +83,11 @@ async def collect_metric(request: Request):
             "event_id": event_id,
             "metric": metric_data}
         
-        # 4. Đẩy vào queuem không (mon-blocking)
-        metric_queue.put_nowait(item_to_queue)
+        # 4. Đẩy vào queue (non-blocking)
+        shared_queue.metric_queue.put_nowait(item_to_queue)
 
         # 5. Kiểm tra áp lực queue
-        check_queue_pressure()
+        shared_queue.check_queue_pressure()
 
         return {"status": "success", "event_id": event_id}
     
@@ -106,11 +101,8 @@ async def collect_metric(request: Request):
     
 @app.get("/health")
 async def health_check():
-
-    qsize = metric_queue.qsize()
-
-    max_size = int(config1.QUEUE_MAX_SIZE, 100000)
-    
+    qsize = shared_queue.metric_queue.qsize()
+    max_size = int(config.QUEUE_MAX_SIZE, 100000)
     return {"status": "healthy", 
             "queue_size": qsize, 
             "max_queue_size": max_size,

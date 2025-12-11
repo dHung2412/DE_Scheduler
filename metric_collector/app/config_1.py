@@ -23,7 +23,6 @@ class Config_1:
 
     if _threshold_env:
         QUEUE_WARNING_THRESHOLD = int(_threshold_env)
-
     else:
         QUEUE_WARNING_THRESHOLD = int(QUEUE_MAX_SIZE * 0.8)
         
@@ -32,7 +31,6 @@ class Config_1:
 
     if _schema_path_str:
         AVRO_SCHEMA_PATH = Path(_schema_path_str.strip('"').strip("'"))
-
     else:
         AVRO_SCHEMA_PATH = None
 
