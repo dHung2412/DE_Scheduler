@@ -43,7 +43,6 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
-# Tắt bớt log ồn ào của py4j khi shutdown
 logging.getLogger("py4j").setLevel(logging.ERROR)
 logging.getLogger("py4j.java_gateway").setLevel(logging.ERROR)
 
