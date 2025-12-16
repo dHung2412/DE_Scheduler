@@ -1,11 +1,4 @@
-"""
-Daily Bronze Table Maintenance
-- Binpack compaction for last 7 days
-- Target file size: 20MB
-- Minimum 5 input files
-"""
 from datetime import datetime, timedelta
-
 from airflow import DAG
 from airflow.operators.bash import BashOperator
 
@@ -34,8 +27,8 @@ bronze_by_day = BashOperator(
     bash_command="""
     spark-submit \
         --master local[2] \
-        --conf spark.driver.memory=2g \
-        --conf spark.executor.memory=2g \
+        --conf spark.driver.memory=1g \
+        --conf spark.executor.memory=1g \
         --name maintenance_bronze_by_day \
         --jars "/opt/airflow/dags/spark_jobs/utils/jars/*" \
         /opt/airflow/dags/spark_jobs/maintenance/maintenance_bronze_by_day.py

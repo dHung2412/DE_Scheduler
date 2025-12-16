@@ -1,5 +1,4 @@
 from datetime import datetime, timedelta
-
 from airflow import DAG
 from airflow.operators.bash import BashOperator
 
@@ -28,8 +27,8 @@ bronze_by_week = BashOperator(
     bash_command="""
     spark-submit \
         --master local[2] \
-        --conf spark.driver.memory=4g \
-        --conf spark.executor.memory=4g \
+        --conf spark.driver.memory=2g \
+        --conf spark.executor.memory=2g \
         --name maintenance_bronze_by_week \
         --jars "/opt/airflow/dags/spark_jobs/utils/jars/*" \
         /opt/airflow/dags/spark_jobs/maintenance/maintenance_bronze_by_week.py
