@@ -19,7 +19,7 @@ Dự án này triển khai một Data Pipeline toàn diện (End-to-End), đư�
 - `docker-compose.yaml`: Định nghĩa toàn bộ hạ tầng (Infrastructure as Code).
 
 ## 🏗 Kiến trúc hệ thống (Architecture)
-Hệ thống sử dụng kiến trúc **Lambda Architecture** giản lược, kết hợp giữa Streaming (Ingestion) và Batch (Processing).
+Hệ thống sử dụng kiến trúc **Lambda Architecture**, kết hợp giữa Streaming (Ingestion) và Batch (Processing).
 
 ![Pipeline Architecture](./utils/pipeline.png)
 
@@ -45,7 +45,7 @@ Hệ thống sử dụng kiến trúc **Lambda Architecture** giản lược, k�
 *   Trigger bởi Airflow định kỳ (Hourly).
 *   **Incremental Load**: Chỉ đọc dữ liệu mới từ Bronze dựa vào watermark `ingestion_timestamp`.
 *   **Parsing**: Parse cột `payload` JSON thành các cột quan trọng (PR details, Issue state...).
-*   **Upsert**: Sử dụng `MERGE INTO` để deduplicate dữ liệu.
+*   **Append Only**: Chiến lược ghi nhận sự kiện lịch sử, không update/delete để tối ưu performace (No MoR overhead).
 
 **4. Silver Layer (Part 2): Structured to Enriched (dbt)**
 *   Làm sạch dữ liệu, chuẩn hóa định dạng chuỗi.
@@ -65,13 +65,19 @@ Hệ thống sử dụng kiến trúc **Lambda Architecture** giản lược, k�
     4.  `dbt test`: Kiểm tra chất lượng dữ liệu (Unique ID, Not Null...).
 
 **7. Maintenance Layer (Iceberg Table Optimization)**
-Hệ thống Iceberg cần được bảo trì định kỳ để giải quyết vấn đề "Small Files" do quá trình Streaming sinh ra liên tục.
-*   **Daily Job**: ([af_maintenance_bronze_by_day.py])
-    *   Thực hiện **Rewrite Data Files (Compaction)** sử dụng chiến thuật Bin-pack.
-    *   Gom hàng ngàn file nhỏ (KB) thành các file tiêu chuẩn (~20MB) để tăng tốc độ đọc cho Spark/dbt.
-*   **Weekly Job**: ([af_maintenance_bronze_by_week.py])
-    *   **Expire Snapshots**: Xóa các version dữ liệu cũ (Time Travel) không còn cần thiết.
-    *   **Cleanup**: Xóa bỏ các file rác (Orphan files) và Manifest cũ để giải phóng dung lượng Storage.
+Hệ thống Iceberg cần được bảo trì định kỳ để giải quyết vấn đề "Small Files" (do Streaming) và "Metadata Bloat" (do time travel history).
+
+*   **Daily Maintenance**: (`maintenance_{bronze|silver}_by_day.py`)
+    *   **Mục tiêu**: Tối ưu hiệu suất ĐỌC và LƯU TRỮ.
+    *   **Compaction**: Gom các file nhỏ (do streaming/batch nhỏ sinh ra) thành file chuẩn (20MB).
+    *   **Data Layout Optimization (Silver only)**: Sử dụng chiến thuật **Sort (Z-Order)** theo `event_type` & `created_at`. Giúp Query Engine bỏ qua (Skip) dữ liệu không cần thiết khi lọc, tăng tốc độ truy vấn đáng kể.
+    *   **Cost Efficiency**: Sử dụng ràng buộc `min-input-files` để tránh chạy job lãng phí khi dữ liệu ít, và `cutoff` date để chỉ xử lý dữ liệu mới.
+
+*   **Weekly Maintenance**: (`maintenance_{bronze|silver}_by_week.py`)
+    *   **Mục tiêu**: Dọn dẹp rác hệ thống & Giải phóng dung lượng.
+    *   **Expire Snapshots**: Xóa bỏ các metadata check-points cũ (> 7 ngày). Giữ lại tối thiểu 5 snapshots gần nhất để đảm bảo an toàn cho Time Travel.
+    *   **Remove Orphan Files**: Xóa dứt điểm các file vật lý trôi nổi không còn được tham chiếu bởi bất kỳ snapshot nào.
+    *   **Rewrite Position Deletes**: Không áp dụng (Vì hệ thống thiết kế dạng Append-Only).
 
 ## 🚀 Getting Started
 
@@ -80,4 +86,4 @@ Hệ thống Iceberg cần được bảo trì định kỳ để giải quyết
 - RAM tối thiểu: 6-8GB.
 
 ### 2. Setup Environment
-Tạo file [.env] tại thư mục gốc và cấu hình các thông số kết nối (tham khảo file `docker-compose.yaml`):
+Tạo file `.env` tại thư mục gốc và cấu hình các thông số kết nối (tham khảo file `docker-compose.yaml`):
