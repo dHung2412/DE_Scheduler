@@ -1,16 +1,9 @@
 """
 GitHub Events Pipeline DAG
+====================================
 Orchestrates the full Bronze -> Silver -> Gold pipeline
-
-Schedule: Hourly
-Tasks:
-1. Spark: Bronze -> Silver transformation
-2. dbt: Silver model refresh
-3. dbt: Gold model refresh  
-4. dbt: Data quality tests
 """
 from datetime import datetime, timedelta
-
 from airflow import DAG
 from airflow.operators.bash import BashOperator
 
