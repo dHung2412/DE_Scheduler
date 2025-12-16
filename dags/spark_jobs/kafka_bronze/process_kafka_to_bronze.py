@@ -45,7 +45,6 @@ logging.basicConfig(
 )
 logging.getLogger("py4j").setLevel(logging.ERROR)
 logging.getLogger("py4j.java_gateway").setLevel(logging.ERROR)
-
 logger = logging.getLogger(__name__)
 
 # __________________________ SCHEMA __________________________
@@ -53,7 +52,7 @@ def load_avro_schema(schema_path: str):
     try:
         schema_file = Path(schema_path)
         if not schema_file.exists():
-            raise FileNotFoundError(f"Schema file not found: {schema_path}")
+            raise FileNotFoundError(f"Schema file not found: {schema_path}.")
        
         with open(schema_file, 'r', encoding='utf-8') as f:
             schema_dict = json.load(f)
@@ -65,7 +64,6 @@ def load_avro_schema(schema_path: str):
     except Exception as e:
         logger.error(f"-----> [BRONZE] Lỗi khi load Avro schema: {e}.")
         raise
-
 
 def get_nested_schemas():
     actor_schema = StructType([
@@ -83,7 +81,6 @@ def get_nested_schemas():
 
     return actor_schema, repo_schema
 
-
 def get_spark_schema():
     actor_schema, repo_schema = get_nested_schemas()
     return StructType([
@@ -95,7 +92,6 @@ def get_spark_schema():
         StructField("public", BooleanType(), True),
         StructField("created_at", StringType(), True),
     ])
-
 
 # __________________________ UDF DECODER __________________________
 def create_avro_decoder_udf(avro_schema, spark_schema):
@@ -145,7 +141,7 @@ def create_avro_decoder_udf(avro_schema, spark_schema):
 
                 records.append(record)
 
-            logger.info(f"-----> [BRONZE] Decoded {len(records)} records from Avro batch")
+            logger.info(f"-----> [BRONZE] Decoded {len(records)} records from Avro batch.")
             return records
         
         except Exception as e:
@@ -154,58 +150,47 @@ def create_avro_decoder_udf(avro_schema, spark_schema):
     
     return udf(decode_avro_batch, ArrayType(spark_schema))
 
-
 # __________________________ BRONZE TABLE __________________________
-def create_bronze_table_if_not_exists(spark: SparkSession, catalog: str, namespace: str, table_name: str):
-    catalog = config.ICEBERG_CATALOG
-    namespace = config.BRONZE_NAMESPACE
-    table_name = config.BRONZE_TABLE
-    full_table_name = f"{catalog}.{namespace}.{table_name}"
-    
+def create_bronze_table_if_not_exists(spark: SparkSession, catalog, namespace, bronze_table_name):
+    bronze_table = f"{config.ICEBERG_CATALOG}.{config.BRONZE_NAMESPACE}.{config.BRONZE_TABLE}"
     sql_file_path = os.path.join(parent_dir, "utils", "sql", "bronze_table.sql")
     
     try: 
-        # 1. Tạo namespace
         spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {catalog}.{namespace}")
         logger.info(f"-----> [BRONZE] Đảm bảo namespace {catalog}.{namespace} tồn tại.")
         
-        # 2. Kiểm tra bảng
-        if spark.catalog.tableExists(full_table_name):
-            logger.info(f"-----> [BRONZE] Bảng {full_table_name} đã tồn tại.")
+        if spark.catalog.tableExists(bronze_table):
+            logger.info(f"-----> [BRONZE] Bảng {bronze_table} đã tồn tại.")
             return
-        logger.info(f"-----> [BRONZE] Bảng {full_table_name} chưa tồn tại.")
         
-        # 3. Tạo table theo schema
+        logger.info(f"-----> [BRONZE] Reading DDL from: {sql_file_path}.")
         create_table_sql = load_sql_from_file(
             str(sql_file_path),
-            full_table_name = full_table_name
+            bronze_table = bronze_table
         )
         
         spark.sql(create_table_sql)
-        logger.info(f"-----> [BRONZE] Đã tạo table {full_table_name}.")
+        logger.info(f"-----> [BRONZE] Đã tạo table {bronze_table}.")
     
     except Exception as e:
-        logger.error(f"-----> [BRONZE] Lỗi khi tạo table: {e}")
+        logger.error(f"-----> [BRONZE] Lỗi khi tạo table: {e}.")
         raise
-    
 
-# __________________________ MAIN STREAMING PIPELINE __________________________
-def write_batch_to_bronze(batch_df, batch_id, full_table_name):
-    # Local reference
-    target_table = full_table_name
+# __________________________ MAIN PROCESSING __________________________
+def write_batch_to_bronze(batch_df, batch_id, bronze_table):
+    target_table = bronze_table
     
     try:
         batch_df.cache()
         record_count = batch_df.count()
         
         if record_count == 0:
-            logger.info(f"-----> [BRONZE] Batch {batch_id}: Không có dữ liệu mới từ Kafka")
+            logger.info(f"-----> [BRONZE] Batch {batch_id}: Không có dữ liệu mới từ Kafka.")
             batch_df.unpersist()
             return
         else:
-            logger.info(f"-----> [BRONZE] Batch {batch_id}: Nhận {record_count} records từ Kafka")
+            logger.info(f"-----> [BRONZE] Batch {batch_id}: Nhận {record_count} records từ Kafka.")
         
-        # Lấy thông tin kafka partition bằng aggregate
         try:
             kafka_partitions = batch_df.select(collect_set("kafka_partition").alias("partitions")).first()
             if kafka_partitions and kafka_partitions.partitions:
@@ -214,14 +199,13 @@ def write_batch_to_bronze(batch_df, batch_id, full_table_name):
         except Exception as e:
             logger.warning(f"-----> [BRONZE] Batch {batch_id}: Không thể lấy thông tin Kafka partition: {e}")
         
-        # Write to Bronze table
         logger.info(f"-----> [BRONZE] Batch {batch_id}: Đang ghi {record_count} records vào {target_table}...")
         
         batch_df.writeTo(target_table) \
             .option("fanout-enabled", "true") \
             .append()
         
-        logger.info(f"-----> [BRONZE] Batch {batch_id}: Đã ghi thành công {record_count} records vào Bronze")
+        logger.info(f"-----> [BRONZE] Batch {batch_id}: Đã ghi thành công {record_count} records vào Bronze.")
         
     except Exception as e:
         logger.error(f"-----> [BRONZE] Batch {batch_id}: Lỗi khi ghi dữ liệu: {e}", exc_info=True)
@@ -232,23 +216,17 @@ def write_batch_to_bronze(batch_df, batch_id, full_table_name):
         except:
             pass
 
-
-def run_kafka_to_bronze_pipeline(spark, avro_schema):
+def run_process_kafka_to_bronze(spark: SparkSession, avro_schema):
     """
     Flow: Kafka (Avro Binary) → UDF Decode → Explode → Flatten → Iceberg Bronze
     """
     catalog = config.ICEBERG_CATALOG
     namespace = config.BRONZE_NAMESPACE
-    table_name = config.BRONZE_TABLE
-    full_table_name = f"{catalog}.{namespace}.{table_name}"
+    bronze_table_name = config.BRONZE_TABLE
+    bronze_table = f"{catalog}.{namespace}.{bronze_table_name}"
     
     # 1. Tạo bronze table
-    create_bronze_table_if_not_exists(
-        spark,
-        catalog,
-        namespace,
-        table_name
-    )
+    create_bronze_table_if_not_exists(spark, catalog, namespace, bronze_table_name)
 
     # 2. Đọc stream từ Kafka (binary mode)
     logger.info(f"-----> [BRONZE] Bắt đầu đọc từ Kafka topic: {config.KAFKA_TOPIC}.")
@@ -261,7 +239,7 @@ def run_kafka_to_bronze_pipeline(spark, avro_schema):
         .load()
     logger.info(f"-----> [BRONZE] Đã kết nối thành công với Kafka.")
 
-    # 3. Lấy spark schema
+    # 3. Spark schema
     spark_schema = get_spark_schema()
 
     # 4. Tạo UDF decoder
@@ -310,13 +288,13 @@ def run_kafka_to_bronze_pipeline(spark, avro_schema):
     col("ingestion_date"),
     col("kafka_partition"),
     col("kafka_offset")
-)
+    )
 
     # 9. Ghi vào Iceberg Bronze table
-    logger.info(f"-----> [BRONZE] Bắt đầu ghi dữ liệu vào {full_table_name}")
+    logger.info(f"-----> [BRONZE] Bắt đầu ghi dữ liệu vào {bronze_table}")
 
     query = parsed_df.writeStream \
-        .foreachBatch(lambda batch_df, batch_id: write_batch_to_bronze(batch_df, batch_id, full_table_name)) \
+        .foreachBatch(lambda batch_df, batch_id: write_batch_to_bronze(batch_df, batch_id, bronze_table)) \
         .option("checkpointLocation", config.BRONZE_CHECKPOINT_LOCATION) \
         .trigger(processingTime="30 seconds") \
         .start()
@@ -329,52 +307,53 @@ def main():
     spark = None
     query = None
     try:
-       # 1. Khởi tạo Spark
-        logger.info("-----> [BRONZE] Đang khởi tạo Spark Session...")
+        logger.info("-----> [BRONZE] Khởi tạo Spark Session...")
         spark_client = SparkClient(app_name="Kafka-to-Bronze", job_type="streaming")
         spark = spark_client.get_session()
         
-        # 2. Load Avro schema
         logger.info("-----> [BRONZE] Đang load Avro schema...")
         avro_schema = load_avro_schema(config.AVRO_SCHEMA_PATH)
         
-        # 3. Chạy streaming pipeline
-        logger.info("-----> [BRONZE] Đang khởi động streaming pipeline...")
+        logger.info("-----> [BRONZE] Bắt đầu Streaming Pipeline...")
         query = run_kafka_to_bronze_pipeline(spark, avro_schema)
         
-        # 4. Chờ terminate
         logger.info("-----> [BRONZE] Pipeline đang chạy. Nhấn Ctrl+C để dừng.")
         query.awaitTermination()
 
     except KeyboardInterrupt:
-        logger.info(f"-----> [BRONZE] Nhận tín hiệu dừng từ người dùng (Ctrl+C).")
+        logger.info("-----> [BRONZE] Pipeline bị ngắt bởi người dùng.")
+
     except Exception as e:
-        if "awaitTermination" in str(e) or "An error occurred while calling" in str(e):
-            logger.info(f"-----> [BRONZE] Pipeline dừng (Interrupted).")
-        else:
-            logger.error(f"-----> [BRONZE] Lỗi không mong muốn trang pipeline: {e}", exc_info=True)
-            raise
+        logger.error("-----> [BRONZE] Lỗi trong Pipeline", exc_info=True)
+        raise
+
     finally:
         logger.info("-----> [BRONZE] Bắt đầu quy trình Shutdown...")
-        
-        if query:
+
+        if query is not None:
             try:
                 if query.isActive:
                     logger.info("-----> [BRONZE] Đang dừng Streaming Query...")
                     query.stop()
                     logger.info("-----> [BRONZE] Streaming Query đã dừng.")
             except Exception as e:
-                logger.warning(f"-----> [BRONZE] Không thể check/stop query sạch sẽ (có thể kết nối Spark đã mất): {e}")
+                logger.warning(
+                    "-----> [BRONZE] Không thể stop Streaming Query sạch sẽ",
+                    exc_info=True
+                )
 
-        if spark:
+        if spark is not None:
             try:
                 logger.info("-----> [BRONZE] Đang đóng Spark Session...")
                 spark.stop()
                 logger.info("-----> [BRONZE] Spark Session đã đóng.")
             except Exception as e:
-                logger.warning(f"-----> [BRONZE] Lỗi khi đóng Spark session: {e}")
-                
-        logger.info(f"-----> [BRONZE] Pipeline đã tắt hoàn toàn (Graceful Shutdown).")
+                logger.warning(
+                    "-----> [BRONZE] Lỗi khi đóng Spark Session",
+                    exc_info=True
+                )
+
+        logger.info("-----> [BRONZE] Pipeline đã tắt hoàn toàn (Graceful Shutdown).")
 
 if __name__ == "__main__":
     main()
