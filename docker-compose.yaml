@@ -5,10 +5,8 @@ x-airflow-common: &airflow-common
   env_file:
     - ${ENV_FILE_PATH:-.env}
   environment: &airflow-common-env
-    # SỬ DỤNG LOCAL EXECUTOR
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
-    # Kết nối DB cho Airflow
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres/${POSTGRES_DB}
     AIRFLOW__CORE__FERNET_KEY: ''
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
@@ -47,7 +45,6 @@ x-airflow-common: &airflow-common
   networks:
       - data_stack_net
 
-# --------------------------------------------------------------------------------------
 services:
   #____________________POSTGRES____________________
   postgres:
@@ -169,7 +166,6 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
-      # Data retention settings
       KAFKA_LOG_RETENTION_HOURS: 168        # 7 ngày
       KAFKA_LOG_RETENTION_BYTES: 1073741824 # 1GB per partition
       KAFKA_LOG_SEGMENT_BYTES: 1073741824   # 1GB per segment
@@ -232,9 +228,9 @@ services:
       - MINIO_ROOT_USER=${MINIO_ROOT_USER}
       - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
     ports:
-      - 8888:8888 # Jupyter
-      - 8081:8080 # Spark UI
-      - 10000:10000 # Spark Thrift Server
+      - 8888:8888     # Jupyter
+      - 8081:8080     # Spark UI
+      - 10000:10000   # Spark Thrift Server
 
   rest:
     image: apache/iceberg-rest-fixture
