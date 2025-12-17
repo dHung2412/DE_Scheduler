@@ -1,3 +1,4 @@
+![GitHub repo status](https://img.shields.io/badge/Project_Status-Finished-brightgreen?style=for-the-badge&logo=github)
 # Data Pipeline for GitHub Events
 
 Dự án này triển khai một Data Pipeline toàn diện (End-to-End), được thiết kể để xử lý dữ liệu sự kiện thời gian thực từ GitHub, sử dụng kiến trúc Lakehouse hiện đại.
