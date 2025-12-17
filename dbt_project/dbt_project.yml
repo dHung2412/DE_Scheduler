@@ -15,19 +15,15 @@ test-paths:  ["tests"]
 macro-paths: ["macros"]
 docs-paths:  ["docs"]
 
-# Build directory
 target-path: "target"
 clean-targets:
   - "target"
   - "dbt_packages"
 
-# Query comment configuration (disable for Spark compatibility)
 query-comment: ""
 
-# Models configuration
 models:
   github_analytics:
-    # Silver models - incremental with merge
     silver:
       +materialized: incremental
       +schema: silver
@@ -36,19 +32,11 @@ models:
       +file_format: iceberg
       +unique_key: event_id
       
-    # Gold models - table materialization
     gold:
       +materialized: table
       +schema: gold
       +file_format: iceberg
 
-# Seeds configuration
-seeds:
-  github_analytics:
-    +quote_columns: false
-    +schema: "seeds"
-
-# Tests
 tests:
   github_analytics:
     +store_failures: true
