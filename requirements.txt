@@ -20,12 +20,9 @@ dotenv==0.9.9
 # AWS/S3
 boto3==1.41.2
 
-# dbt - Analytics
-# Pin click version to avoid conflicts with dbt
+# dbt
 click<8.1.8,>=8.0.0
 
-# Pin dbt-core to stable version (prevent RC versions)
-dbt-core<1.11,>=1.8.0
 dbt-postgres==1.9.1
 dbt-spark[PyHive]
 
