@@ -1,89 +1,141 @@
-# Data Pipeline for GitHub Events 
+# DE_SCHEDULER
+### *End-to-End Data Engineering Pipeline with Medallion Architecture*
 
-Dự án này triển khai một Data Pipeline toàn diện (End-to-End), được thiết kể để xử lý dữ liệu sự kiện thời gian thực từ GitHub, sử dụng kiến trúc Lakehouse hiện đại.
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/dHung2412/DE_Scheduler)
+[![Version](https://img.shields.io/badge/version-1.0.0-blue)](https://github.com/dHung2412/DE_Scheduler)
+[![Tech Stack](https://img.shields.io/badge/stack-Airflow%20|%20Spark%20|%20MinIO%20|%20Kafka%20|%20Iceberg-orange)](https://github.com/dHung2412/DE_Scheduler)
 
-## 🛠 Tech Stack
-*   **Ingestion**: FastAPI & Kafka
-*   **Orchestration**: [Apache Airflow](https://airflow.apache.org/)
-*   **Processing Engine**: [Apache Spark](https://spark.apache.org/) (Streaming & Batch)
-*   **Table Format**: [Apache Iceberg](https://iceberg.apache.org/)
-*   **Transformation**: [dbt](https://www.getdbt.com/)
-*   **Storage**: [MinIO](https://min.io/) (S3 Compatible)
-*   **Infrastructure**: Docker & Docker Compose
+**DE_SCHEDULER** là một nền tảng Data Pipeline toàn diện (End-to-End) được thiết kế để thu thập, xử lý và phân tích dữ liệu sự kiện thời gian thực từ GitHub. Dự án áp dụng kiến trúc **Medallion Lakehouse** để tối ưu hóa hiệu suất truy vấn và đảm bảo tính nhất quán của dữ liệu.
 
-## 📂 Project Structure
-- `airflow/`: Cấu hình Docker build và Plugins cho Airflow.
-- `dags/`: Chứa các pipeline điều phối (DAGs) và code Spark.
-- `dbt_project/`: Project dbt quản lý logic transform dữ liệu (Silver -> Gold).
-- `metric_collector/`: Service API nhận dữ liệu và Kafka Producer.
-- `docker-compose.yaml`: Định nghĩa toàn bộ hạ tầng (Infrastructure as Code).
+---
 
-## 🏗 Kiến trúc hệ thống (Architecture)
-Hệ thống sử dụng kiến trúc **Lambda Architecture**, kết hợp giữa Streaming (Ingestion) và Batch (Processing).
+## 2. Các tính năng chính (Features)
+
+- **Real-time Ingestion**: Nhận dữ liệu sự kiện GitHub từ nguồn bên ngoài qua FastAPI với cơ chế Backpressure và Non-blocking I/O, sau đó đẩy vào Kafka.
+- **Medallion Architecture**: Tổ chức dữ liệu qua 3 lớp chuẩn hóa: **Bronze** (Dữ liệu thô), **Silver** (Dữ liệu đã dọn dẹp & làm phẳng), **Gold** (Dữ liệu tổng hợp cho Business).
+- **ACID Transactions**: Sử dụng **Apache Iceberg** làm format bảng, mang lại khả năng Transactional (Acid), Time Travel và Schema Evolution.
+- **Automated Orchestration**: Toàn bộ quy trình từ ingest đến transform được điều phối tự động bởi **Apache Airflow**.
+- **Data Quality & Testing**: Tích hợp **dbt (data build tool)** để thực hiện các bài kiểm tra chất lượng dữ liệu (Uniqueness, Not Null, Referential Integrity).
+- **Maintenance Automation**: Tự động hóa việc bảo trì bảng (Compaction, Snapshot Expiration, Z-Order Optimization) để duy trì hiệu suất hệ thống.
+
+---
+
+## 3. Công nghệ sử dụng (Tech Stack)
+
+- **Ngôn ngữ**: Python, SQL.
+- **Điều phối (Orchestration)**: Apache Airflow.
+- **Xử lý dữ liệu (Computing Engine)**: Apache Spark (Structured Streaming & Batch).
+- **Hàng đợi thông điệp (Messaging)**: Apache Kafka, Zookeeper.
+- **Lưu trữ Lakehouse**: Apache Iceberg, MinIO (S3 Compatible).
+- **Biến đổi dữ liệu (Transformation)**: dbt.
+- **Cơ sở dữ liệu**: PostgreSQL (Metadata storage).
+- **Hạ tầng**: Docker, Docker Compose.
+
+---
+
+## 4. Kiến trúc hệ thống (System Architecture)
+
+Dự án tuân thủ mô hình xử lý dữ liệu hiện đại, kết hợp giữa Streaming và Batch:
+
+1.  **Collection Layer**: FastAPI Service nhận dữ liệu JSON thô từ nguồn bên ngoài qua endpoint `/collect`.
+2.  **Ingestion Layer**: Kafka Producer (Worker) nhận dữ liệu từ hàng đợi nội bộ -> Serialize Avro -> Đẩy vào Kafka Topics.
+3.  **Bronze Layer**: Spark Structured Streaming đọc từ Kafka -> Giải mã Avro -> Ghi vào Iceberg Bronze tables.
+4.  **Silver Layer**: Spark Batch (được Airflow trigger định kỳ) -> Parse JSON payload -> Làm phẳng cấu trúc dữ liệu.
+5.  **Gold Layer**: dbt thực hiện các logic Business -> Tính toán metric -> Lưu trữ dữ liệu phân tích cuối cùng.
 
 ![Pipeline Architecture](./utils/pipeline.png)
 
-### Detailed Pipeline Flow
+---
 
-**1. Ingestion Layer: API & Kafka (High Throughput & Reliability)**
-*   **API Gateway**: Thiết kế theo hướng **Non-blocking I/O** & **Fail-Fast**.
-    *   Nhận payload JSON -> Gán Trace ID (`event_id`) -> Đẩy vào Memory Queue (`put_nowait`).
-    *   Phản hồi client tức thì với độ trễ cực thấp (<10ms).
-    *   Cơ chế **Backpressure**: Trả về `503 Service Unavailable` khi hàng đợi đầy để bảo vệ tài nguyên server.
-*   **Producer Worker**:
-    *   **Hybrid Batching Strategy**: Tự động chuyển đổi giữa 'Polling' (High Load) và 'Waiting' (Low Latency) để tối ưu throughput.
-    *   **Non-blocking Serialization**: Dùng `run_in_executor` để đẩy tác vụ nén Avro (CPU-bound) sang thread riêng, giữ cho Event Loop luôn mượt mà.
-    *   **Data Durability**: Cơ chế Retry kết hợp **Local Fallback** giúp đảm bảo không mất mát dữ liệu (Zero Data Loss) kể cả khi Kafka gặp sự cố.
+## 5. Hướng dẫn cài đặt (Installation & Setup)
 
-**2. Bronze Layer: Streaming Ingestion (Kafka -> Iceberg)**
-*   Spark Structured Streaming đọc liên tục từ Kafka topic.
-*   Sử dụng **UDF Decoder** giải mã Avro binary ngay trong Spark.
-*   **Flattening**: Làm phẳng cấu trúc JSON lồng nhau.
-*   Ghi vào bảng Iceberg `demo.bronze.github_events` với chế độ Fanout Writer.
+### Yêu cầu hệ thống
+- Docker & Docker Compose.
+- RAM tối thiểu: 8GB (Khuyến nghị 12GB+).
 
-**3. Silver Layer (Part 1): Raw to Structured (Spark Batch)**
-*   Trigger bởi Airflow định kỳ (Hourly).
-*   **Incremental Load**: Chỉ đọc dữ liệu mới từ Bronze dựa vào watermark `ingestion_timestamp`.
-*   **Parsing**: Parse cột `payload` JSON thành các cột quan trọng (PR details, Issue state...).
-*   **Append Only**: Chiến lược ghi nhận sự kiện lịch sử, không update/delete để tối ưu performace (No MoR overhead).
+### Các bước cài đặt
 
-**4. Silver Layer (Part 2): Structured to Enriched (dbt)**
-*   Làm sạch dữ liệu, chuẩn hóa định dạng chuỗi.
-*   **Event Categorization**: Phân loại sự kiện (Code Change, Social, Management...).
-*   Tính toán Activity Score cho từng event.
+1.  **Clone repository**:
+    ```bash
+    git clone https://github.com/dHung2412/DE_Scheduler.git
+    cd DE_Scheduler
+    ```
 
-**5. Gold Layer: Aggregation & Business Insights (dbt)**
-*   **Daily Aggregation**: Tổng hợp hoạt động người dùng theo ngày.
-*   **User Profiling**: Phân loại User (Developer, Reviewer, etc.) dựa trên hành vi đóng góp.
-*   Tính toán các chỉ số xu hướng (Rolling Average).
+2.  **Cấu hình biến môi trường**:
+    Tạo file `.env` từ file mẫu hoặc thay đổi các tham số
 
-**6. Orchestration**
-*   **Airflow DAG** chạy định kỳ mỗi giờ:
-    1.  `Spark Job`: Bronze -> Silver Parsed.
-    2.  `dbt run`: Silver Enriched update.
-    3.  `dbt run`: Gold User Activity update.
-    4.  `dbt test`: Kiểm tra chất lượng dữ liệu (Unique ID, Not Null...).
+3.  **Khởi chạy hệ thống**:
+    ```bash
+    docker-compose up -d
+    ```
 
-**7. Maintenance Layer (Iceberg Table Optimization)**
-Hệ thống Iceberg cần được bảo trì định kỳ để giải quyết vấn đề "Small Files" (do Streaming) và "Metadata Bloat" (do time travel history).
+4.  **Kiểm tra trạng thái**:
+    - Airflow UI: `http://localhost:8080` (admin/admin)
+    - Spark UI: `http://localhost:8081`
+    - MinIO Console: `http://localhost:9000` (admin/admin123)
 
-*   **Daily Maintenance**: (`maintenance_{bronze|silver}_by_day.py`)
-    *   **Mục tiêu**: Tối ưu hiệu suất ĐỌC và LƯU TRỮ.
-    *   **Compaction**: Gom các file nhỏ (do streaming/batch nhỏ sinh ra) thành file chuẩn (20MB).
-    *   **Data Layout Optimization (Silver only)**: Sử dụng chiến thuật **Sort (Z-Order)** theo `event_type` & `created_at`. Giúp Query Engine bỏ qua (Skip) dữ liệu không cần thiết khi lọc, tăng tốc độ truy vấn đáng kể.
-    *   **Cost Efficiency**: Sử dụng ràng buộc `min-input-files` để tránh chạy job lãng phí khi dữ liệu ít, và `cutoff` date để chỉ xử lý dữ liệu mới.
+---
 
-*   **Weekly Maintenance**: (`maintenance_{bronze|silver}_by_week.py`)
-    *   **Mục tiêu**: Dọn dẹp rác hệ thống & Giải phóng dung lượng.
-    *   **Expire Snapshots**: Xóa bỏ các metadata check-points cũ (> 7 ngày). Giữ lại tối thiểu 5 snapshots gần nhất để đảm bảo an toàn cho Time Travel.
-    *   **Remove Orphan Files**: Xóa dứt điểm các file vật lý trôi nổi không còn được tham chiếu bởi bất kỳ snapshot nào.
-    *   **Rewrite Position Deletes**: Không áp dụng (Vì hệ thống thiết kế dạng Append-Only).
+## 6. Cách sử dụng (Usage)
 
-## 🚀 Getting Started
 
-### 1. Prerequisites
-- Docker & Docker Compose installed.
-- RAM tối thiểu: 6-8GB.
+### Bước 1: Chuẩn bị dữ liệu (Data Ingestion)
+1.  **Khởi chạy Collector Service** (FastAPI):
+    Dịch vụ này nhận dữ liệu từ nguồn ngoài và đẩy vào Kafka.
+    ```bash
+    cd metric_collector
+    uvicorn app.main:app --host 0.0.0.0 --port 8000
+    ```
 
-### 2. Setup Environment
-Tạo file `.env` tại thư mục gốc và cấu hình các thông số kết nối (tham khảo file `docker-compose.yaml`):
+2.  **Đẩy dữ liệu mẫu (Inject Data)**:
+    Mở một terminal mới và chạy script để giả lập việc gửi dữ liệu GitHub tới Collector.
+    ```bash
+    python -m metric_collector.test.batch_injector
+    ```
+
+3.  **Xử lý dữ liệu từ Kafka sang Bronze**:
+    Chạy Spark job để đưa dữ liệu từ Kafka vào bảng Iceberg lớp Bronze.
+    ```bash
+    python -m dags.spark_jobs.kafka_bronze.process_kafka_to_bronze
+    ```
+
+### Bước 2: Kích hoạt Pipeline điều phối (Airflow)
+1.  Truy cập Airflow UI tại `http://localhost:8080`.
+2.  Bật (Unpause) DAG `github_events_pipeline`.
+3.  Kích hoạt (Trigger) DAG để thực hiện luồng: **Bronze -> Silver -> Gold** và thực hiện **dbt test**.
+
+### Bước 3: Bảo trì hệ thống
+Các DAG `maintenance_bronze_*` và `maintenance_silver_*` được thiết lập để chạy định kỳ nhằm tối ưu hóa file lưu trữ (Compaction) và dọn dẹp Metadata trên MinIO.
+
+---
+
+## 7. Truy vấn dữ liệu & Phân tích (Analytics)
+Bạn có thể sử dụng Jupyter Notebook tích hợp sẵn để kiểm tra kết quả tại mỗi Layer:
+- **Địa chỉ**: `http://localhost:8888`
+- **Cách dùng**: Sử dụng Spark SQL để query các bảng trong namespaces `demo.bronze`, `demo.silver`, `demo.gold`.
+
+---
+
+## 7. Ảnh chụp màn hình hoặc Demo (Screenshots/Gifs)
+
+*(Hiện tại chưa có ảnh demo)*
+
+---
+
+## 8. Cấu trúc thư mục (Project Structure)
+
+```text
+DE_Scheduler/
+├── airflow/              # Cấu hình Docker & Plugins cho Airflow
+├── dags/                 # Các DAGs điều phối pipeline
+│   ├── spark_jobs/       # Chứa code Spark (Python) cho từng Layer
+│   └── af_*.py           # Định nghĩa Workflow cho Airflow
+├── dbt_project/          # Dự án dbt (Macros, Models, Tests)
+├── metric_collector/     # Service thu thập dữ liệu & Kafka Producer
+├── dbt_profiles/         # Cấu hình kết nối dbt tới Spark Thrift Server
+├── notebooks/            # Jupyter Notebooks phục vụ phân tích (EDA)
+├── utils/                # Các scripts bổ trợ và schema định nghĩa
+├── docker-compose.yaml   # Định nghĩa toàn bộ hạ tầng dịch vụ
+└── .env                  # Biến môi trường cấu hình hệ thống
+```
+
