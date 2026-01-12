@@ -3,42 +3,50 @@
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/dHung2412/DE_Scheduler)
 [![Version](https://img.shields.io/badge/version-1.0.0-blue)](https://github.com/dHung2412/DE_Scheduler)
-[![Tech Stack](https://img.shields.io/badge/stack-Airflow%20|%20Spark%20|%20MinIO%20|%20Kafka%20|%20Iceberg-orange)](https://github.com/dHung2412/DE_Scheduler)
+[![Tech Stack](https://img.shields.io/badge/stack-Airflow%20|%20Spark%20|%20MinIO%20|%20Kafka%20|%20Iceberg-orange|%20Prometheus%20|%20Grafana%20)](https://github.com/dHung2412/DE_Scheduler)
 
-**DE_SCHEDULER** là một nền tảng Data Pipeline toàn diện (End-to-End) được thiết kế để thu thập, xử lý và phân tích dữ liệu sự kiện thời gian thực từ GitHub. Dự án áp dụng kiến trúc **Medallion Lakehouse** để tối ưu hóa hiệu suất truy vấn và đảm bảo tính nhất quán của dữ liệu.
+**DE_SCHEDULER** là một Data Pipeline (End-to-End) được thiết kế để thu thập, xử lý và phân tích dữ liệu sự kiện thời gian thực từ GitHub. Dự án áp dụng kiến trúc **Medallion Lakehouse** để tối ưu hóa hiệu suất truy vấn và đảm bảo tính nhất quán của dữ liệu.
 
 ---
 
-## 2. Các tính năng chính (Features)
+## 1. Các tính năng chính (Features)
 
 - **Real-time Ingestion**: Nhận dữ liệu sự kiện GitHub từ nguồn bên ngoài qua FastAPI với cơ chế Backpressure và Non-blocking I/O, sau đó đẩy vào Kafka.
+- **Robust Architecture**: Thiết kế "Double Safety Net" với cơ chế Spill-to-disk tại Queue và Kafka Producer giúp đảm bảo **Zero Data Loss** khi hệ thống quá tải hoặc mất kết nối.
+- **Optimized Batching**: Sử dụng kỹ thuật **Micro-batching** và **Application-level Compression** (đóng gói metrics vào file Avro) giúp giảm tải 99% cho Kafka Broker.
 - **Medallion Architecture**: Tổ chức dữ liệu qua 3 lớp chuẩn hóa: **Bronze** (Dữ liệu thô), **Silver** (Dữ liệu đã dọn dẹp & làm phẳng), **Gold** (Dữ liệu tổng hợp cho Business).
 - **ACID Transactions**: Sử dụng **Apache Iceberg** làm format bảng, mang lại khả năng Transactional (Acid), Time Travel và Schema Evolution.
+- **Comprehensive Monitoring**: Tích hợp **Prometheus** để giám sát sâu từng chỉ số (Queue Size, Serialization Time, Kafka Latency, etc.).
 - **Automated Orchestration**: Toàn bộ quy trình từ ingest đến transform được điều phối tự động bởi **Apache Airflow**.
 - **Data Quality & Testing**: Tích hợp **dbt (data build tool)** để thực hiện các bài kiểm tra chất lượng dữ liệu (Uniqueness, Not Null, Referential Integrity).
 - **Maintenance Automation**: Tự động hóa việc bảo trì bảng (Compaction, Snapshot Expiration, Z-Order Optimization) để duy trì hiệu suất hệ thống.
 
 ---
 
-## 3. Công nghệ sử dụng (Tech Stack)
+## 2. Công nghệ sử dụng (Tech Stack)
 
 - **Ngôn ngữ**: Python, SQL.
+- **Framework API**: FastAPI, Uvicorn.
 - **Điều phối (Orchestration)**: Apache Airflow.
 - **Xử lý dữ liệu (Computing Engine)**: Apache Spark (Structured Streaming & Batch).
 - **Hàng đợi thông điệp (Messaging)**: Apache Kafka, Zookeeper.
 - **Lưu trữ Lakehouse**: Apache Iceberg, MinIO (S3 Compatible).
 - **Biến đổi dữ liệu (Transformation)**: dbt.
+- **Giám sát & Cảnh báo (Monitoring)**: Prometheus, Grafana (Optional).
 - **Cơ sở dữ liệu**: PostgreSQL (Metadata storage).
 - **Hạ tầng**: Docker, Docker Compose.
 
 ---
 
-## 4. Kiến trúc hệ thống (System Architecture)
+## 3. Kiến trúc hệ thống (System Architecture)
 
 Dự án tuân thủ mô hình xử lý dữ liệu hiện đại, kết hợp giữa Streaming và Batch:
 
-1.  **Collection Layer**: FastAPI Service nhận dữ liệu JSON thô từ nguồn bên ngoài qua endpoint `/collect`.
-2.  **Ingestion Layer**: Kafka Producer (Worker) nhận dữ liệu từ hàng đợi nội bộ -> Serialize Avro -> Đẩy vào Kafka Topics.
+1.  **Collection Layer (API)**: FastAPI Service nhận dữ liệu JSON thô. Sử dụng **Shared Queue** làm vùng đệm để tách biệt việc nhận request và xử lý.
+2.  **Ingestion Layer (Worker)**:
+    -   **Batching**: Worker gom metric từ Queue theo kích thước (1000 items) hoặc thời gian (5s).
+    -   **Packing**: Nén cả lô thành 1 file **Avro Binary** duy nhất.
+    -   **Reliability**: Gửi file Avro vào Kafka Topic `raw_metrics_avro`. Nếu lỗi, tự động ghi file xuống đĩa (Local Fallback) để Replay sau.
 3.  **Bronze Layer**: Spark Structured Streaming đọc từ Kafka -> Giải mã Avro -> Ghi vào Iceberg Bronze tables.
 4.  **Silver Layer**: Spark Batch (được Airflow trigger định kỳ) -> Parse JSON payload -> Làm phẳng cấu trúc dữ liệu.
 5.  **Gold Layer**: dbt thực hiện các logic Business -> Tính toán metric -> Lưu trữ dữ liệu phân tích cuối cùng.
@@ -47,7 +55,7 @@ Dự án tuân thủ mô hình xử lý dữ liệu hiện đại, kết hợp g
 
 ---
 
-## 5. Hướng dẫn cài đặt (Installation & Setup)
+## 4. Hướng dẫn cài đặt (Installation & Setup)
 
 ### Yêu cầu hệ thống
 - Docker & Docker Compose.
@@ -73,10 +81,11 @@ Dự án tuân thủ mô hình xử lý dữ liệu hiện đại, kết hợp g
     - Airflow UI: `http://localhost:8080` (admin/admin)
     - Spark UI: `http://localhost:8081`
     - MinIO Console: `http://localhost:9000` (admin/admin123)
+    - Grafana UI: `http://localhost:3000` (admin/admin)
 
 ---
 
-## 6. Cách sử dụng (Usage)
+## 5. Cách sử dụng (Usage)
 
 
 ### Bước 1: Chuẩn bị dữ liệu (Data Ingestion)
@@ -93,7 +102,11 @@ Dự án tuân thủ mô hình xử lý dữ liệu hiện đại, kết hợp g
     python -m metric_collector.test.batch_injector
     ```
 
-3.  **Xử lý dữ liệu từ Kafka sang Bronze**:
+3.  **Giám sát Metrics (Optional)**:
+    -   Truy cập endpoint `/metrics` để xem Prometheus metrics: `http://localhost:8000/metrics`.
+    -   Kiểm tra sức khỏe hệ thống: `http://localhost:8000/health`.
+
+4.  **Xử lý dữ liệu từ Kafka sang Bronze**:
     Chạy Spark job để đưa dữ liệu từ Kafka vào bảng Iceberg lớp Bronze.
     ```bash
     python -m dags.spark_jobs.kafka_bronze.process_kafka_to_bronze
@@ -109,7 +122,7 @@ Các DAG `maintenance_bronze_*` và `maintenance_silver_*` được thiết lậ
 
 ---
 
-## 7. Truy vấn dữ liệu & Phân tích (Analytics)
+## 6. Truy vấn dữ liệu & Phân tích (Analytics)
 Bạn có thể sử dụng Jupyter Notebook tích hợp sẵn để kiểm tra kết quả tại mỗi Layer:
 - **Địa chỉ**: `http://localhost:8888`
 - **Cách dùng**: Sử dụng Spark SQL để query các bảng trong namespaces `demo.bronze`, `demo.silver`, `demo.gold`.
@@ -132,6 +145,7 @@ DE_Scheduler/
 │   └── af_*.py           # Định nghĩa Workflow cho Airflow
 ├── dbt_project/          # Dự án dbt (Macros, Models, Tests)
 ├── metric_collector/     # Service thu thập dữ liệu & Kafka Producer
+├── monitoring/           # Cấu hình Prometheus
 ├── dbt_profiles/         # Cấu hình kết nối dbt tới Spark Thrift Server
 ├── notebooks/            # Jupyter Notebooks phục vụ phân tích (EDA)
 ├── utils/                # Các scripts bổ trợ và schema định nghĩa
