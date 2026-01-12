@@ -131,7 +131,8 @@ Bạn có thể sử dụng Jupyter Notebook tích hợp sẵn để kiểm tra 
 
 ## 7. Ảnh chụp màn hình hoặc Demo (Screenshots/Gifs)
 
-*(Hiện tại chưa có ảnh demo)*
+### 7.1. Chi tiết kiến trúc của hệ thống
+![Pipeline Architecture](./utils/pipeline_at_source_to_kafka.png)
 
 ---
 
