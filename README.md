@@ -3,7 +3,7 @@
 
 [![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/dHung2412/DE_Scheduler)
 [![Version](https://img.shields.io/badge/version-1.0.0-blue)](https://github.com/dHung2412/DE_Scheduler)
-[![Tech Stack](https://img.shields.io/badge/stack-Airflow%20|%20Spark%20|%20MinIO%20|%20Kafka%20|%20Iceberg-orange|%20Prometheus%20|%20Grafana%20)](https://github.com/dHung2412/DE_Scheduler)
+[![Tech Stack](https://img.shields.io/badge/stack-Airflow%20|%20Spark%20|%20MinIO%20|%20Kafka%20|%20Iceberg%20|%20Prometheus%20|%20Grafana-orange)](https://github.com/dHung2412/DE_Scheduler)
 
 **DE_SCHEDULER** là một Data Pipeline (End-to-End) được thiết kế để thu thập, xử lý và phân tích dữ liệu sự kiện thời gian thực từ GitHub. Dự án áp dụng kiến trúc **Medallion Lakehouse** để tối ưu hóa hiệu suất truy vấn và đảm bảo tính nhất quán của dữ liệu.
 
