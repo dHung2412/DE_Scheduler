@@ -21,12 +21,12 @@ CREATE TABLE IF NOT EXISTS {full_table_name} (
     push_distinct_size INT,
     push_head_sha STRING,
 
-    pr_number INT,
-    pr_id BIGINT,
-    pr_state STRING,
-    pr_title STRING,
-    pr_merged BOOLEAN,
-    pr_merged_at TIMESTAMP,
+    pull_request_number INT,
+    pull_request_id BIGINT,
+    pull_request_state STRING,
+    pull_request_title STRING,
+    pull_request_merge BOOLEAN,
+    pull_request_merge_at TIMESTAMP,
 
     issue_number INT,
     issue_title STRING,

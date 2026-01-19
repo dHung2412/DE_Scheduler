@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS {full_table_name} (
     id STRING,
     type STRING,
+    public BOOLEAN,
     
     actor_id BIGINT,
     actor_login STRING,
@@ -13,7 +14,6 @@ CREATE TABLE IF NOT EXISTS {full_table_name} (
     repo_url STRING,
     
     payload STRING,
-    public BOOLEAN,
     created_at STRING,
     ingestion_timestamp TIMESTAMP,
     ingestion_date DATE,
