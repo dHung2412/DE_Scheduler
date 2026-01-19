@@ -1,18 +1,26 @@
 """
 Bronze to Silver Layer Processing
-====================================
-Flow: Bronze Iceberg → Parse JSON → Deduplication → Incremental Load → Silver Iceberg
-
-Schema-driven approach:
-- Sử dụng SQL schema từ utils/sql/silver_table.sql
-- Parse JSON payload với from_json (fast parsing)
-- Deduplication để tránh duplicate records
-- Incremental loading dựa vào ingestion_timestamp
-
+=================================
+Pipeline xử lý dữ liệu từ tầng Bronze (Iceberg) sang tầng Silver (Iceberg).
+Flow:
+    Bronze Iceberg Table
+    -> Incremental Load (Filter by ingestion_timestamp)
+    -> Deduplication (Drop duplicates by ID)
+    -> Transformation (Parse JSON payload, casting types)
+    -> Silver Iceberg Table (Merge: Insert on not matched)
 """
+
 import logging
 import os
 import sys
+from typing import List
+from pyspark.sql import SparkSession, DataFrame, Column
+from pyspark.sql.functions import (
+    col, from_json, to_timestamp, lit, current_timestamp, when
+)
+from pyspark.sql.types import (
+    StructType, StructField, StringType, IntegerType, LongType, BooleanType
+)
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
@@ -22,12 +30,7 @@ from config_2 import Config_2
 from spark_client import SparkClient
 from utils.helper.load_sql import load_sql_from_file
 
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import (col, from_json, to_timestamp, to_date, when, lit, coalesce, current_timestamp, get_json_object)
-from pyspark.sql.types import (StructType, StructField, StringType, IntegerType, LongType, BooleanType, TimestampType)
-
 config = Config_2()
-
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,26 +41,9 @@ logging.getLogger("py4j").setLevel(logging.ERROR)
 logging.getLogger("py4j.java_gateway").setLevel(logging.ERROR)
 logger = logging.getLogger(__name__)
 
-PAYLOAD_MAPPING = {    
-    "payload_action": "action",
-    "payload_ref": "ref",
-    "payload_ref_type": "ref_type",
-    "push_size": "size",
-    "push_distinct_size": "distinct_size",
-    "push_head_sha": "head",
-    "pr_number": "number",
-    "issue_number": "number",
-    "pr_id": "pull_request.id",
-    "pr_state": "pull_request.state",
-    "pr_title": "pull_request.title",
-    "pr_merged": "pull_request.merged",
-    "pr_merged_at": "pull_request.merged_at", 
-    "issue_title": "issue.title",
-    "issue_state": "issue.state"
-}
+# =================== Schema ===================
 
-# __________________________ SCHEMA __________________________
-def get_unified_payload_schema():
+def get_unified_payload_schema() -> StructType:
     return StructType([
         StructField("action", StringType(), True),
         StructField("ref", StringType(), True),
@@ -65,16 +51,15 @@ def get_unified_payload_schema():
         StructField("size", IntegerType(), True),
         StructField("distinct_size", IntegerType(), True),
         StructField("head", StringType(), True),
-        StructField("number", IntegerType(), True),
         
         StructField("pull_request", StructType([
             StructField("id", LongType(), True),
-            StructField("title", StringType(), True),
             StructField("state", StringType(), True),
+            StructField("title", StringType(), True),
             StructField("merged", BooleanType(), True),
             StructField("merged_at", StringType(), True),
         ]), True),
-        
+    
         StructField("issue", StructType([
             StructField("number", IntegerType(), True),
             StructField("title", StringType(), True),
@@ -82,110 +67,59 @@ def get_unified_payload_schema():
         ]), True)
     ])
 
-# __________________________ SILVER TABLE __________________________
-def create_silver_table_if_not_exists(spark: SparkSession, catalog, namespace, silver_table_name):
-    silver_table = f"{catalog}.{namespace}.{silver_table_name}"
+# =================== Table ===================
+
+def create_silver_table_if_not_exists(spark: SparkSession, catalog_name: str, namespace_name: str, full_table_path: str):
     sql_file_path = os.path.join(parent_dir, "utils", "sql", "silver_table.sql")
 
     try:
-        # 1. Tạo namespace
-        spark.sql(f"CREATE NAMESPACE IF NOT EXISTS {catalog}.{namespace}")
-        logger.info(f"-----> [SILVER] Đảm bảo namespace {catalog}.{namespace} tồn tại.")
-        
-        # 2. Check if table exists
-        if spark.catalog.tableExists(silver_table):
-            logger.info(f"-----> [SILVER] Table {silver_table} đã tồn tại.")
+        spark.sql(f"CREATE TABLE IF NOT EXISTS {catalog_name}.{namespace_name}")
+
+        if spark.catalog.tableExists(full_table_path):
+            logger.info(f"Table {full_table_path} already exists.")
             return
         
-        # 3.Tạo table theo schema
-        logger.info(f"-----> [SILVER] Reading DDL from: {sql_file_path}.")        
+        logger.info(f"-----> Reading DDL from: {sql_file_path}.")
         create_sql = load_sql_from_file(
             str(sql_file_path),
-            silver_table=silver_table
+            silver_table=full_table_path
         )
 
         spark.sql(create_sql)
-        logger.info(f"-----> [SILVER] Đã tạo table {silver_table}.")
-        
+        logger.info(f"-----> Create Table: {full_table_path}.")
+
     except Exception as e:
-        logger.error(f"-----> [SILVER] Lỗi khi tạo table: {e}.")
+        logger.error(f"-----> Failed create Table: {e}.")
         raise
 
-def get_last_processed_timestamp(spark: SparkSession, catalog, namespace, silver_table_name) -> str:
-    silver_table = f"{catalog}.{namespace}.{silver_table_name}"
-    default_timestamp = "1970-01-01 00:00:00"
-    
+def get_last_processed_timestamp(spark: SparkSession, full_table_path: str) -> str:
+    default_timestamp = "1990-01-01 00:00:00"
+
     try:
-        if not spark.catalog.tableExists(silver_table):
-            logger.info(f"-----> [SILVER] Table {silver_table} chưa tồn tại, sẽ load toàn bộ từ Bronze.")
+        if not spark.catalog.tableExists(full_table_path):
+            logger.info(f"-----> Table {full_table_path} not found. Full load triggered")
             return default_timestamp
-        
-        row = spark.sql(f"SELECT MAX(processed_at) as max_ts FROM {silver_table}").first()
+
+        row = spark.sql(f"SELECT MAX(processed_at) as max_ts FROM {full_table_path}").first()
+
         if row and row['max_ts']:
             max_ts = row['max_ts']
-            logger.info(f"-----> [SILVER] Last processed timestamp: {max_ts}.")
+            logger.info(f"-----> Last processed timestamp: {max_ts}")
             return str(max_ts)
-
         else:
-            logger.info(f"-----> [SILVER] Table {silver_table} trống, sẽ load toàn bộ từ Bronze.")
+            logger.info(f"-----> Silver table {full_table_path} is empty. Full load triggered.")
             return default_timestamp
-            
+    
     except Exception as e:
-        logger.warning(f"-----> [SILVER] Không thể lấy last timestamp: {e}.")
+        logger.warning(f"-----> Error reading watermark: {e}. Defaulting to full load.")
         return default_timestamp
 
-# __________________________ MAIN PROCESSING __________________________
-def run_process_bronze_to_silver(spark: SparkSession):
-    """
-    Flow: Bronze Iceberg → Incremental Load → Deduplication → Parse JSON → Silver Iceberg
-    """
-    catalog = config.ICEBERG_CATALOG
-    
-    bronze_namespace = config.BRONZE_NAMESPACE
-    bronze_table_name = config.BRONZE_TABLE
-    bronze_table = f"{catalog}.{bronze_namespace}.{bronze_table_name}"
+# =================== Transformation logic ===================
 
-    silver_namespace = config.SILVER_NAMESPACE
-    silver_table_name = config.SILVER_TABLE
-    silver_table = f"{catalog}.{silver_namespace}.{silver_table_name}"
-    
-    logger.info(f"-----> [SILVER] Bắt đầu process: {bronze_table} -> {silver_table}")
-    
-    # 1. Tạo Silver table
-    create_silver_table_if_not_exists(spark, catalog, silver_namespace, silver_table_name)
-    
-    # 2. Lấy last processed timestamp
-    last_ts = get_last_processed_timestamp(spark, catalog, silver_namespace, silver_table_name)
-    
-    # 3. Incremental load từ Bronze
-    logger.info(f"-----> [SILVER] Đọc dữ liệu Bronze từ ingestion_timestamp > {last_ts}.")
-    
-    bronze_df = spark.table(bronze_table) \
-        .filter(col("ingestion_timestamp") > to_timestamp(lit(last_ts)))
+def _get_column_expression() -> List[Column]:
+    p = col("payload_parsed")
 
-    bronze_df = bronze_df.dropDuplicates(["id"])
-    dedup_count = bronze_df.count()
-
-    if dedup_count == 0:
-        logger.info("-----> [SILVER] Không có dữ liệu mới.")
-    else:
-        logger.info(f"-----> [SILVER] Số records mới cần xử lý: {dedup_count}.")
-    
-    # 4. Parse created_at timestamp
-    logger.info(f"-----> [SILVER] Parse created_at timestamp.")
-    df = bronze_df.withColumn(
-        "created_at_ts",
-        to_timestamp(col("created_at"), "yyyy-MM-dd'T'HH:mm:ss'Z'")
-    )
-    
-    # 5. Parse JSON payloads
-    logger.info(f"-----> [SILVER] Parsing JSON payloads with Unified Schema.")
-    df = df.withColumn(
-        "payload_parsed",
-        from_json(col("payload"), get_unified_payload_schema())
-    )
-
-    select_expressions = [
+    cols = [
         col("id").alias("event_id"),
         col("type").alias("event_type"),
         col("created_at_ts").alias("created_at"),
@@ -201,79 +135,108 @@ def run_process_bronze_to_silver(spark: SparkSession):
         current_timestamp().alias("processed_at")
     ]
 
-    for target_col, source_col in PAYLOAD_MAPPING.items():
-        if target_col == "pr_merged_at":
-            expr = when(col(f"payload_parsed.{source_col}").isNotNull(), 
-                        to_timestamp(col(f"payload_parsed.{source_col}"), "yyyy-MM-dd'T'HH:mm:ss'Z'"))
-        else:
-            expr = col(f"payload_parsed.{source_col}")
+    cols.extend([
+        p.getItem("action").alias("payload_action"),
+        p.getItem("ref").alias("payload_ref"),
+        p.getItem("ref_type").alias("payload_ref_type"),
+        p.getItem("size").alias("push_size"),
+        p.getItem("distinct_size").alias("push_distinct_size"),
+        p.getItem("head").alias("push_head_sha"),
 
-        select_expressions.append(expr.alias(target_col))
+        p.getItem("pull_request").getItem("id").alias("pull_request_id"),
+        p.getItem("pull_request").getItem("number").alias("pull_request_number"),
+        p.getItem("pull_request").getItem("state").alias("pull_request_state"),
+        p.getItem("pull_request").getItem("title").alias("pull_request_title"),
+        p.getItem("pull_request").getItem("merged").alias("pull_request_merge"),
+        
+        when(p.getItem("pull_request").getItem("merged_at").isNotNull(),
+        to_timestamp(p.getItem("pull_request").getItem("merged_at"))).alias("pull_request_merge_at"),
 
-    # 6. Final: Select and Write
-    silver_df = df.select(*select_expressions)
+        p.getItem("issue").getItem("number").alias("issue_number"),
+        p.getItem("issue").getItem("title").alias("issue_title"),
+        p.getItem("issue").getItem("state").alias("issue_state")
+    ])
 
-    logger.info(f"-----> [SILVER] Writing data to {silver_table}")
+    return cols
 
-    silver_df.createOrReplaceTempView("batch_source_data")
+def run_process_bronze_to_silver(spark: SparkSession):
+    catalog = config.ICEBERG_CATALOG
+    bronze_table_full = f"{catalog}.{config.BRONZE_NAMESPACE}.{config.BRONZE_TABLE}"
+    silver_table_full = f"{catalog}.{config.SILVER_NAMESPACE}.{config.SILVER_TABLE}"
+
+    logger.info(f"-----> Start processing {bronze_table_full} -> {silver_table_full}")
+    # 1. Initialize table
+    create_silver_table_if_not_exists(spark, catalog, config.SILVER_NAMESPACE, silver_table_full)
+
+    # 2. Get watermark
+    last_ts = get_last_processed_timestamp(spark, silver_table_full)
+
+    # 3. Read Incremental Data
+    logger.info(f"-----> Reading changes since {last_ts}")
+    bronze_df = spark.table(bronze_table_full) \
+        .filter(col("ingestion_timestamp") > to_timestamp(lit(last_ts)))
+
+    # Deduplication
+    bronze_df = bronze_df.dropDuplicates(["id"])
+    count = bronze_df.count()
+
+    if count == 0:
+        logger.info("-----> No new data found. Skipping.")
+        return
     
+    # 4. Transformations
+    logger.info("-----> Applying Transformation & parsing JSON.")
+    transformed_df = (
+        bronze_df
+        .withColumn("created_at_ts", to_timestamp(col("created_at"), "yyyy-MM-dd'T'HH:mm:ss'Z'"))
+        .withColumn("payload_parsed", from_json(col("payload"), get_unified_payload_schema()))
+        .select(*_get_column_expression()) # Unpacking Operator
+    )
+
+    # 5. Merge
+    logger.info(f"-----> Merging data into {silver_table_full}")
+    transformed_df.createOrReplaceTempView("batch_source_data")
+
     merge_sql = f"""
-    MERGE INTO {silver_table} AS target
-    USING batch_source_data AS source
+    MERGE INTO {silver_table_full} AS target
+    USING batch_source_data AS source 
     ON target.event_id = source.event_id
     WHEN NOT MATCHED THEN
         INSERT *
     """
-    
     spark.sql(merge_sql)
 
-    logger.info(f"-----> [SILVER] Pipeline hoàn tất!")
-    
+    logger.info(f"-----> Pipeline Finished.")
+
 def main():
     spark = None
-    query = None
     try:
-        logger.info(f"[SILVER] Khởi tạo Spark Session...")
-        spark_client = SparkClient(app_name="Bronze-to-Silver", job_type="batch")
-        spark = spark_client.get_session()
+        logger.info("[SILVER] --------- Initialize Spark Session.")
+        spark_client = SparkClient(app_name="bronze-to-silver", job_type="batch")
+        spark_client.get_session()
 
-        logger.info(f"[SILVER] Bắt đầu Batch Pipeline...")
-        query = run_process_bronze_to_silver(spark)
+        logger.info("[SILVER] --------- Starting Batch Pipeline.")
+        run_process_bronze_to_silver(spark)
+
+        logger.info("[SILVER] --------- Pipeline is runnign. Ctrl + C to stop.")
+        query.awaitTermination()
 
     except KeyboardInterrupt:
-        logger.info("-----> [SILVER] Pipeline bị ngắt bởi người dùng.")
+        logger.info("[SILVER] --------- Interrupt Pipeline.")
 
     except Exception as e:
-        logger.error("-----> [SILVER] Lỗi trong Pipeline", exc_info=True)
+        logger.error("[SILVER] --------- Critical error in Pipeline.", exc_info=True)
         raise
 
     finally:
-        logger.info("-----> [SILVER] Bắt đầu quy trình Shutdown...")
-
-        if query is not None:
+        if spark:
             try:
-                if query.isActive:
-                    logger.info("-----> [SILVER] Đang dừng Streaming Query...")
-                    query.stop()
-                    logger.info("-----> [SILVER] Streaming Query đã dừng.")
-            except Exception as e:
-                logger.warning(
-                    "-----> [SILVER] Không thể stop Streaming Query",
-                    exc_info=True
-                )
-
-        if spark is not None:
-            try:
-                logger.info("-----> [SILVER] Đang đóng Spark Session...")
                 spark.stop()
-                logger.info("-----> [SILVER] Spark Session đã đóng.")
+                logger.info("[SILVER] --------- Spark Session stopped.")
             except Exception as e:
-                logger.warning(
-                    "-----> [SILVER] Lỗi khi đóng Spark Session",
-                    exc_info=True
-                )
+                logger.error(f"[SILVER] --------- Error stopping Spark: {e}.")
 
-        logger.info("-----> [SILVER] Pipeline đã tắt hoàn toàn (Graceful Shutdown).")
+        logger.info("[SILVER] --------- Shutdown complete.")
 
 if __name__ == "__main__":
     main()
